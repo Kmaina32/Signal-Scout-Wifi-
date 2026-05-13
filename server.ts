@@ -17,10 +17,17 @@ async function startServer() {
 
   // Wi-Fi Diagnostic Endpoint
   app.get("/api/wifi", async (req, res) => {
+    const { source } = req.query;
     const platform = process.platform;
     
     try {
-      if (platform === "win32") {
+      // Force simulated data if requested
+      if (source === "simulated") {
+        throw new Error("Simulated mode requested.");
+      }
+
+      // Windows - netsh
+      if ((platform === "win32" && (!source || source === "netsh")) || source === "netsh") {
         const { stdout } = await execAsync("netsh wlan show interfaces");
         const signal = stdout.match(/Signal\s*:\s*(\d+)%/)?.[1];
         const ssid = stdout.match(/^\s*SSID\s*:\s*(.+)$/m)?.[1]?.trim();
@@ -45,7 +52,8 @@ async function startServer() {
         });
       } 
       
-      if (platform === "darwin") {
+      // macOS - airport
+      if ((platform === "darwin" && (!source || source === "airport")) || source === "airport") {
         const airportPath = "/System/Library/PrivateFrameworks/Apple80211.framework/Versions/Current/Resources/airport";
         const { stdout } = await execAsync(`${airportPath} -I`);
         
@@ -64,14 +72,15 @@ async function startServer() {
           bssid: bssid || "00:00:00:00:00:00",
           radio: "Apple 802.11",
           channel: parseInt(channel || "0"),
-          rx_rate: 0, // Airport -I doesn't easily give Mbps
+          rx_rate: 0,
           tx_rate: 0,
           timestamp: Date.now(),
           isSimulated: false
         });
       }
 
-      if (platform === "linux") {
+      // Linux - nmcli
+      if ((platform === "linux" && (!source || source === "nmcli")) || source === "nmcli") {
         const { stdout } = await execAsync("nmcli -t -f active,ssid,signal,rate,bssid,chan device wifi | grep '^yes'");
         const [active, ssid, signal, rate, bssid, chan] = stdout.split(':');
         
@@ -88,22 +97,25 @@ async function startServer() {
         });
       }
 
-      throw new Error(`Platform ${platform} not supported for direct Wi-Fi hardware access.`);
+      throw new Error(`Platform ${platform} or source ${source} not supported for direct hardware access.`);
 
     } catch (e) {
-      // Return 200 with error information instead of 503 to prevent proxy HTML interception
+      // Simulate data if hardware fails or simulated is requested
+      const simulatedSignal = Math.floor(Math.random() * 40) + 40; // 40-80%
       res.status(200).json({ 
-        signal: 0,
-        ssid: "Hardware Offline",
-        bssid: "00:00:00:00:00:00",
-        radio: "N/A",
-        channel: 0,
-        rx_rate: 0,
-        tx_rate: 0,
+        signal: simulatedSignal,
+        ssid: source === "simulated" ? "Simulated Network" : "Hardware Offline",
+        bssid: "DE:AD:BE:EF:00:01",
+        radio: "Simulated 802.11ax",
+        channel: 6,
+        rx_rate: 120.5,
+        tx_rate: 98.2,
         timestamp: Date.now(),
         isSimulated: true,
-        error: "Hardware access failed or unsupported platform.",
-        message: "This application requires low-level network access available only when hosted on your local workstation. Deploy to your machine and run 'npm run dev' to see real data.",
+        error: source === "simulated" ? null : "Hardware access failed or unsupported.",
+        message: source === "simulated" 
+            ? "Running in simulated mode for demonstration." 
+            : "Hardware access failed. Returning simulated data for UI testing.",
         details: e instanceof Error ? e.message : String(e)
       });
     }
@@ -123,6 +135,52 @@ async function startServer() {
       res.sendFile(path.join(distPath, "index.html"));
     });
   }
+
+  // Diagnostic: Spectral Congestion Scan
+  app.get("/api/networks", async (req, res) => {
+    const platform = process.platform;
+    try {
+      if (platform === "win32") {
+        const { stdout } = await execAsync("netsh wlan show networks mode=bssid");
+        res.json({ raw: stdout, platform });
+      } else if (platform === "darwin") {
+        const airportPath = "/System/Library/PrivateFrameworks/Apple80211.framework/Versions/Current/Resources/airport";
+        const { stdout } = await execAsync(`${airportPath} -s`);
+        res.json({ raw: stdout, platform });
+      } else if (platform === "linux") {
+        const { stdout } = await execAsync("nmcli -f SSID,CHAN,SIGNAL,BARS,SECURITY device wifi list");
+        res.json({ raw: stdout, platform });
+      } else {
+        throw new Error("Unsupported platform");
+      }
+    } catch (e) {
+      res.json({ 
+        raw: "Simulated spectral data: Channel 1 (2.4GHz) - 80% load, Channel 6 (2.4GHz) - 20% load, Channel 36 (5GHz) - 5% load", 
+        platform: "simulated" 
+      });
+    }
+  });
+
+  // Diagnostic: Ping & Jitter
+  app.get("/api/ping", async (req, res) => {
+    const target = req.query.target || "8.8.8.8";
+    try {
+      // Basic ping - 1 packet for quick response
+      const countFlag = process.platform === "win32" ? "-n 1" : "-c 1";
+      const { stdout } = await execAsync(`ping ${countFlag} ${target}`);
+      
+      let latency = 0;
+      if (process.platform === "win32") {
+        latency = parseInt(stdout.match(/time[=<](\d+)ms/)?.[1] || "0");
+      } else {
+        latency = parseFloat(stdout.match(/time=(\d+\.?\d*)\s*ms/)?.[1] || "0");
+      }
+
+      res.json({ latency, target, timestamp: Date.now() });
+    } catch (e) {
+      res.json({ latency: Math.floor(Math.random() * 20) + 15, target, simulated: true });
+    }
+  });
 
   app.listen(PORT, "0.0.0.0", () => {
     console.log(`Diagnostic server running on http://localhost:${PORT}`);

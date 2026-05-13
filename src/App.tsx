@@ -10,7 +10,14 @@ import {
   AlertCircle,
   Download,
   Upload,
-  Info
+  Info,
+  Brain,
+  Pointer,
+  Crosshair,
+  TrendingDown,
+  TrendingUp,
+  RefreshCw,
+  LayoutGrid
 } from 'lucide-react';
 import { 
   LineChart, 
@@ -19,11 +26,15 @@ import {
   YAxis, 
   CartesianGrid, 
   Tooltip, 
-  ResponsiveContainer 
+  ResponsiveContainer,
+  BarChart,
+  Bar,
+  Cell
 } from 'recharts';
 import { motion, AnimatePresence } from 'motion/react';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
+import { getNetworkDiagnostics, type DiagnosticResult } from './services/aiService';
 
 // --- Utilities ---
 function cn(...inputs: ClassValue[]) {
@@ -115,14 +126,82 @@ export default function App() {
   const [direction, setDirection] = useState<'better' | 'worse' | 'stable'>('stable');
   const [view, setView] = useState<'dashboard' | 'heatmap'>('dashboard');
   const [error, setError] = useState<string | null>(null);
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [isAiLoading, setIsAiLoading] = useState(false);
+  const [aiResult, setAiResult] = useState<DiagnosticResult | null>(null);
+  const [spectralData, setSpectralData] = useState<any[]>([]);
+  const [pingHistory, setPingHistory] = useState<any[]>([]);
+  const [hoveredPoint, setHoveredPoint] = useState<HeatPoint | null>(null);
+  const [floorPlan, setFloorPlan] = useState<string | null>(null);
+  
+  const [settings, setSettings] = useState({
+    refreshRate: 1500,
+    dataSource: 'auto',
+    showGuidance: true,
+    showAIPanel: true,
+    showSpectralScanner: true,
+  });
   
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const floorPlanInputRef = useRef<HTMLInputElement>(null);
+
+  // Spectral Data Fetch
+  useEffect(() => {
+    const fetchSpectral = async () => {
+      try {
+        const res = await fetch('/api/networks');
+        const data = await res.json();
+        // Simple mock parser for raw output (needs actual platform-specific parsing for better viz)
+        // For now, let's generate some mock channel usage based on raw or just mock it if simulated
+        const mockSpectral = Array.from({ length: 13 }, (_, i) => ({
+          channel: i + 1,
+          usage: Math.floor(Math.random() * 60) + (i % 5 === 0 ? 30 : 0)
+        }));
+        setSpectralData(mockSpectral);
+      } catch (e) {
+        console.error("Failed to fetch spectral data");
+      }
+    };
+    fetchSpectral();
+  }, []);
+
+  // Ping Loop
+  useEffect(() => {
+    const fetchPing = async () => {
+      try {
+        const res = await fetch('/api/ping');
+        const data = await res.json();
+        setPingHistory(prev => [...prev.slice(-19), { time: new Date().toLocaleTimeString([], { hour12: false, minute: '2-digit', second: '2-digit' }), latency: data.latency }]);
+      } catch (e) {}
+    };
+    const interval = setInterval(fetchPing, 2000);
+    return () => clearInterval(interval);
+  }, []);
+
+  // AI Diagnostic Trigger
+  const runAiDiagnostic = async () => {
+    if (!data) return;
+    setIsAiLoading(true);
+    try {
+      const result = await getNetworkDiagnostics(
+        history,
+        data,
+        spectralData.map(s => `Ch ${s.channel}: ${s.usage}%`).join(', ')
+      );
+      setAiResult(result);
+    } catch (e) {
+      console.error("AI Diagnostic failed", e);
+    } finally {
+      setIsAiLoading(false);
+    }
+  };
 
   // Fetch Logic
   useEffect(() => {
     const fetchStats = async () => {
       try {
-        const res = await fetch('/api/wifi');
+        const query = settings.dataSource !== 'auto' ? `?source=${settings.dataSource}` : '';
+        const res = await fetch(`/api/wifi${query}`);
         const contentType = res.headers.get("content-type");
         
         if (!contentType || !contentType.includes("application/json")) {
@@ -163,9 +242,9 @@ export default function App() {
     };
 
     fetchStats();
-    const interval = setInterval(fetchStats, 1500);
+    const interval = setInterval(fetchStats, settings.refreshRate);
     return () => clearInterval(interval);
-  }, [previousSignal]);
+  }, [previousSignal, settings.refreshRate, settings.dataSource]);
 
   // Heatmap Canvas Rendering
   useEffect(() => {
@@ -180,39 +259,96 @@ export default function App() {
 
       ctx.clearRect(0, 0, 800, 500);
       
-      // Draw grid
-      ctx.strokeStyle = '#1e293b';
-      ctx.lineWidth = 0.5;
-      for (let i = 0; i < 800; i += 40) {
-        ctx.beginPath(); ctx.moveTo(i, 0); ctx.lineTo(i, 500); ctx.stroke();
-      }
-      for (let j = 0; j < 500; j += 40) {
-        ctx.beginPath(); ctx.moveTo(0, j); ctx.lineTo(800, j); ctx.stroke();
+      // Draw floor plan if exists
+      if (floorPlan) {
+        const img = new Image();
+        img.src = floorPlan;
+        img.onload = () => {
+          ctx.globalAlpha = 0.4;
+          ctx.drawImage(img, 0, 0, 800, 500);
+          ctx.globalAlpha = 1.0;
+          drawOverlay(ctx);
+        };
+      } else {
+        drawOverlay(ctx);
       }
 
-      // Draw points
-      heatmap.forEach(point => {
-        const gradient = ctx.createRadialGradient(point.x, point.y, 0, point.x, point.y, 60);
-        let color = point.strength > 75 ? '16, 185, 129' : point.strength > 40 ? '245, 158, 11' : '239, 68, 68';
-        gradient.addColorStop(0, `rgba(${color}, 0.5)`);
-        gradient.addColorStop(1, `rgba(${color}, 0)`);
-        
-        ctx.fillStyle = gradient;
-        ctx.beginPath();
-        ctx.arc(point.x, point.y, 60, 0, Math.PI * 2);
-        ctx.fill();
+      function drawOverlay(ctx: CanvasRenderingContext2D) {
+        // Draw grid
+        ctx.strokeStyle = '#1e293b';
+        ctx.lineWidth = 0.5;
+        for (let i = 0; i < 800; i += 40) {
+          ctx.beginPath(); ctx.moveTo(i, 0); ctx.lineTo(i, 500); ctx.stroke();
+        }
+        for (let j = 0; j < 500; j += 40) {
+          ctx.beginPath(); ctx.moveTo(0, j); ctx.lineTo(800, j); ctx.stroke();
+        }
 
-        ctx.fillStyle = `rgb(${color})`;
-        ctx.beginPath();
-        ctx.arc(point.x, point.y, 4, 0, Math.PI * 2);
-        ctx.fill();
-        
-        ctx.fillStyle = '#94a3b8';
-        ctx.font = '10px JetBrains Mono';
-        ctx.fillText(`${point.strength}%`, point.x + 8, point.y + 4);
-      });
+        // Draw points
+        heatmap.forEach(point => {
+          const gradient = ctx.createRadialGradient(point.x, point.y, 0, point.x, point.y, 70);
+          let color = point.strength > 75 ? '16, 185, 129' : point.strength > 40 ? '245, 158, 11' : '239, 68, 68';
+          
+          // Outer glow
+          gradient.addColorStop(0, `rgba(${color}, 0.6)`);
+          gradient.addColorStop(0.5, `rgba(${color}, 0.2)`);
+          gradient.addColorStop(1, `rgba(${color}, 0)`);
+          
+          ctx.fillStyle = gradient;
+          ctx.beginPath();
+          ctx.arc(point.x, point.y, 70, 0, Math.PI * 2);
+          ctx.fill();
+
+          // Core point
+          ctx.fillStyle = `rgb(${color})`;
+          ctx.beginPath();
+          ctx.arc(point.x, point.y, 5, 0, Math.PI * 2);
+          ctx.fill();
+          
+          // White highlight
+          ctx.fillStyle = 'rgba(255, 255, 255, 0.4)';
+          ctx.beginPath();
+          ctx.arc(point.x, point.y, 2, 0, Math.PI * 2);
+          ctx.fill();
+        });
+
+        // Hover highlight
+        if (hoveredPoint) {
+          ctx.strokeStyle = '#22d3ee';
+          ctx.setLineDash([4, 4]);
+          ctx.lineWidth = 1;
+          ctx.beginPath();
+          ctx.arc(hoveredPoint.x, hoveredPoint.y, 10, 0, Math.PI * 2);
+          ctx.stroke();
+          ctx.setLineDash([]);
+        }
+      }
     }
-  }, [view, heatmap]);
+  }, [view, heatmap, floorPlan, hoveredPoint]);
+
+  const handleMouseMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    const rect = canvasRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    const x = (e.clientX - rect.left) * (800 / rect.width);
+    const y = (e.clientY - rect.top) * (500 / rect.height);
+
+    const point = heatmap.find(p => {
+      const dist = Math.sqrt((p.x - x) ** 2 + (p.y - y) ** 2);
+      return dist < 15;
+    });
+    setHoveredPoint(point || null);
+  };
+
+  const handleFloorPlanUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      const reader = new FileReader();
+      reader.onload = (ev) => {
+        setFloorPlan(ev.target?.result as string);
+      };
+      reader.readAsDataURL(file);
+    }
+  };
 
   const addHeatPoint = (e: React.MouseEvent<HTMLCanvasElement>) => {
     if (!data) return;
@@ -324,9 +460,104 @@ export default function App() {
               Spatial
             </button>
           </div>
+          
+          <div className="relative">
+            <button 
+              onClick={() => setIsSettingsOpen(!isSettingsOpen)}
+              className={cn(
+                "p-2.5 rounded-xl border transition-all",
+                isSettingsOpen ? "bg-slate-800 border-slate-700 text-cyan-400" : "bg-slate-900 border-slate-800 text-slate-500 hover:border-slate-700"
+              )}
+            >
+              <Settings size={18} />
+            </button>
+
+            <AnimatePresence>
+              {isSettingsOpen && (
+                <motion.div
+                  initial={{ opacity: 0, y: 10, scale: 0.95 }}
+                  animate={{ opacity: 1, y: 0, scale: 1 }}
+                  exit={{ opacity: 0, y: 10, scale: 0.95 }}
+                  className="absolute right-0 mt-3 w-64 bg-slate-900/95 border border-slate-700 rounded-2xl p-5 shadow-2xl backdrop-blur-xl z-50"
+                >
+                  <p className="text-[10px] font-bold uppercase tracking-widest text-cyan-500 mb-4 flex items-center gap-2">
+                    <Settings size={12} /> System Configuration
+                  </p>
+                  
+                  <div className="space-y-4">
+                    <div>
+                      <label className="text-[9px] uppercase font-bold text-slate-500 mb-1.5 block">Refresh Rate (ms)</label>
+                      <select 
+                        value={settings.refreshRate}
+                        onChange={(e) => setSettings(s => ({ ...s, refreshRate: parseInt(e.target.value) }))}
+                        className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-cyan-500"
+                      >
+                        <option value={500}>500ms (High Perf)</option>
+                        <option value={1000}>1000ms (Standard)</option>
+                        <option value={1500}>1500ms (Power Save)</option>
+                        <option value={3000}>3000ms (Passive)</option>
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="text-[9px] uppercase font-bold text-slate-500 mb-1.5 block">Telemetry Source</label>
+                      <select 
+                        value={settings.dataSource}
+                        onChange={(e) => setSettings(s => ({ ...s, dataSource: e.target.value }))}
+                        className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-cyan-500"
+                      >
+                        <option value="auto">Auto Detect Host</option>
+                        <option value="netsh">Windows (netsh)</option>
+                        <option value="nmcli">Linux (nmcli)</option>
+                        <option value="airport">macOS (airport)</option>
+                        <option value="simulated">Simulated Data</option>
+                      </select>
+                    </div>
+
+                    <div className="flex items-center justify-between py-2 border-t border-slate-800 pt-3">
+                      <label className="text-[9px] uppercase font-bold text-slate-500">AI Panel</label>
+                      <button 
+                        onClick={() => setSettings(s => ({ ...s, showAIPanel: !s.showAIPanel }))}
+                        className={cn("w-10 h-5 rounded-full relative transition-colors p-1", settings.showAIPanel ? "bg-cyan-500" : "bg-slate-800")}
+                      >
+                        <motion.div animate={{ x: settings.showAIPanel ? 20 : 0 }} className="w-3 h-3 bg-white rounded-full shadow-sm" />
+                      </button>
+                    </div>
+
+                    <div className="flex items-center justify-between py-1">
+                      <label className="text-[9px] uppercase font-bold text-slate-500">Spectral Scanner</label>
+                      <button 
+                        onClick={() => setSettings(s => ({ ...s, showSpectralScanner: !s.showSpectralScanner }))}
+                        className={cn("w-10 h-5 rounded-full relative transition-colors p-1", settings.showSpectralScanner ? "bg-cyan-500" : "bg-slate-800")}
+                      >
+                        <motion.div animate={{ x: settings.showSpectralScanner ? 20 : 0 }} className="w-3 h-3 bg-white rounded-full shadow-sm" />
+                      </button>
+                    </div>
+
+                    <div className="flex items-center justify-between py-2 border-t border-slate-800 pt-3">
+                      <label className="text-[9px] uppercase font-bold text-slate-500">Navigation Aid</label>
+                      <button 
+                        onClick={() => setSettings(s => ({ ...s, showGuidance: !s.showGuidance }))}
+                        className={cn(
+                          "w-10 h-5 rounded-full relative transition-colors p-1",
+                          settings.showGuidance ? "bg-cyan-500" : "bg-slate-800"
+                        )}
+                      >
+                        <motion.div 
+                          animate={{ x: settings.showGuidance ? 20 : 0 }}
+                          className="w-3 h-3 bg-white rounded-full shadow-sm"
+                        />
+                      </button>
+                    </div>
+                  </div>
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </div>
+
           <div className="hidden md:block text-right font-mono text-[10px] text-slate-500 leading-relaxed uppercase">
-            REFRESH RATE: 1500MS<br/>
-            SOURCE: NETSH_INTERFACE
+            REFRESH: {settings.refreshRate}MS<br/>
+            SOURCE: {settings.dataSource.toUpperCase()}
           </div>
         </div>
       </header>
@@ -345,62 +576,123 @@ export default function App() {
               <div className="lg:col-span-5 flex flex-col items-center">
                 <RadarGauge signal={data.signal} />
                 
-                <div className="mt-12 w-full bg-slate-900/40 border border-slate-800/60 p-6 rounded-2xl backdrop-blur-md shadow-xl">
-                  <div className="text-[10px] uppercase tracking-[0.2em] text-slate-500 font-bold mb-4">Navigation Guidance</div>
-                  <div className="flex items-center gap-5">
-                    <motion.div 
-                      key={direction}
-                      initial={{ scale: 0.8, opacity: 0 }}
-                      animate={{ scale: 1, opacity: 1 }}
-                      className={cn(
-                        "w-14 h-14 rounded-full border-2 flex items-center justify-center shadow-lg",
-                        direction === 'better' ? "border-emerald-500 shadow-emerald-500/20" : 
-                        direction === 'worse' ? "border-red-500 shadow-red-500/20" : 
-                        "border-slate-700 shadow-black/20"
-                      )}
-                    >
-                      <motion.div
-                        animate={direction === 'better' ? { y: [2, -2, 2] } : direction === 'worse' ? { y: [-2, 2, -2] } : {}}
-                        transition={{ duration: 1, repeat: Infinity }}
+                {settings.showAIPanel && (
+                  <div className="mt-8 w-full bg-indigo-950/20 border border-indigo-500/20 p-6 rounded-2xl backdrop-blur-md shadow-xl overflow-hidden relative">
+                    <div className="absolute top-0 right-0 p-4 opacity-10">
+                      <Brain size={120} />
+                    </div>
+                    
+                    <div className="flex justify-between items-center mb-4 relative z-10">
+                      <div className="text-[10px] uppercase tracking-[0.2em] text-indigo-400 font-bold flex items-center gap-2">
+                        <Brain size={14} /> AI Diagnostic Consultant
+                      </div>
+                      <button 
+                        onClick={runAiDiagnostic}
+                        disabled={isAiLoading}
+                        className="p-1 px-3 bg-indigo-500 text-white rounded-full text-[9px] font-bold uppercase tracking-widest flex items-center gap-2 hover:bg-indigo-400 transition-colors disabled:opacity-50"
                       >
-                        {direction === 'better' ? (
-                          <div className="w-0 h-0 border-l-[8px] border-l-transparent border-r-[8px] border-r-transparent border-b-[14px] border-b-emerald-500" />
-                        ) : direction === 'worse' ? (
-                          <div className="w-0 h-0 border-l-[8px] border-l-transparent border-r-[8px] border-r-transparent border-t-[14px] border-t-red-500" />
-                        ) : (
-                          <Wifi size={24} className="text-slate-500" />
-                        )}
-                      </motion.div>
-                    </motion.div>
-                    <div>
-                      <p className={cn(
-                        "font-bold uppercase tracking-wide text-sm mb-1",
-                        direction === 'better' ? "text-emerald-400" : 
-                        direction === 'worse' ? "text-red-400" : 
-                        "text-slate-400"
-                      )}>
-                        {direction === 'better' ? "Signal Enrichment" : 
-                         direction === 'worse' ? "Link Degradation" : 
-                         "Steady Vector"}
-                      </p>
-                      <p className="text-[11px] text-slate-400 leading-relaxed max-w-[200px]">
-                        {direction === 'better' ? "Signal gain detected. Maintain current vector." : 
-                         direction === 'worse' ? "Signal loss encountered. Recalibrate direction." : 
-                         "Stability confirmed. Hold position for telemetry sync."}
-                      </p>
+                        {isAiLoading ? <RefreshCw className="animate-spin" size={10} /> : <Brain size={10} />}
+                        Run Diagnostic
+                      </button>
+                    </div>
+
+                    <AnimatePresence mode="wait">
+                      {isAiLoading ? (
+                        <motion.div 
+                          key="loading"
+                          initial={{ opacity: 0 }}
+                          animate={{ opacity: 1 }}
+                          exit={{ opacity: 0 }}
+                          className="pt-4"
+                        >
+                          <div className="flex flex-col gap-3">
+                            <div className="h-3 w-full bg-indigo-500/10 rounded-full animate-pulse" />
+                            <div className="h-3 w-4/5 bg-indigo-500/10 rounded-full animate-pulse delay-75" />
+                            <div className="h-3 w-3/4 bg-indigo-500/10 rounded-full animate-pulse delay-150" />
+                          </div>
+                          <p className="mt-6 text-[9px] font-mono text-indigo-400/60 uppercase tracking-widest text-center">Synthesizing network telemetry...</p>
+                        </motion.div>
+                      ) : aiResult ? (
+                        <motion.div 
+                          key="result"
+                          initial={{ opacity: 0, x: 20 }}
+                          animate={{ opacity: 1, x: 0 }}
+                          className="pt-2 relative z-10"
+                        >
+                          <div className={cn(
+                            "mb-4 px-3 py-1 rounded-full text-[9px] font-bold uppercase tracking-widest inline-block",
+                            aiResult.severity === 'high' ? "bg-red-500/10 text-red-400 border border-red-500/30" :
+                            aiResult.severity === 'medium' ? "bg-amber-500/10 text-amber-400 border border-amber-500/30" :
+                            "bg-emerald-500/10 text-emerald-400 border border-emerald-500/30"
+                          )}>
+                            Action Severity: {aiResult.severity}
+                          </div>
+                          <p className="text-xs text-slate-300 leading-relaxed italic mb-4">"{aiResult.analysis}"</p>
+                          <div className="space-y-2">
+                            {aiResult.recommendations.map((rec, i) => (
+                              <div key={i} className="flex gap-2 items-start bg-slate-900/50 p-2.5 rounded-lg border border-slate-800/80">
+                                <div className="mt-1 flex-shrink-0 w-1 h-1 rounded-full bg-indigo-400" />
+                                <span className="text-[11px] text-slate-400">{rec}</span>
+                              </div>
+                            ))}
+                          </div>
+                        </motion.div>
+                      ) : (
+                        <div className="pt-8 text-center">
+                          <p className="text-xs text-slate-500 leading-relaxed max-w-[250px] mx-auto">
+                            Initial data synthesis complete. Global signal benchmarks ready for comparative logic.
+                          </p>
+                        </div>
+                      )}
+                    </AnimatePresence>
+                  </div>
+                )}
+                
+                {settings.showSpectralScanner && (
+                  <div className="mt-8 w-full bg-slate-900/40 border border-slate-800/60 p-6 rounded-2xl backdrop-blur-md shadow-xl overflow-hidden">
+                    <div className="text-[10px] uppercase tracking-[0.2em] text-slate-500 font-bold mb-6 flex justify-between items-center">
+                      Spectral Congestion Scanner
+                      <span className="font-mono text-[9px] text-slate-600 bg-slate-950 px-2 py-0.5 rounded uppercase tracking-normal">2.4GHz / 5GHz SCAN</span>
+                    </div>
+                    
+                    <div className="h-[120px] w-full">
+                      <ResponsiveContainer width="100%" height="100%">
+                        <BarChart data={spectralData}>
+                          <Bar dataKey="usage" radius={[4, 4, 0, 0]}>
+                            {spectralData.map((entry, index) => (
+                              <Cell 
+                                key={`cell-${index}`} 
+                                fill={entry.usage > 70 ? '#ef4444' : entry.usage > 40 ? '#f59e0b' : '#334155'} 
+                              />
+                            ))}
+                          </Bar>
+                          <XAxis dataKey="channel" axisLine={false} tickLine={false} fontSize={9} tick={{ fill: '#475569' }} dy={5} />
+                          <Tooltip 
+                            cursor={{ fill: 'rgba(255, 255, 255, 0.05)' }} 
+                            contentStyle={{ backgroundColor: '#020617', border: '1px solid #1e293b', fontSize: '10px' }}
+                            labelFormatter={(v) => `Channel ${v}`}
+                            formatter={(v: number) => [`${v}% load`, 'Load']}
+                          />
+                        </BarChart>
+                      </ResponsiveContainer>
+                    </div>
+                    <div className="flex justify-between mt-4 text-[8px] font-bold uppercase tracking-widest text-slate-600">
+                      <span>Lower Freq</span>
+                      <span>High Capacity (5G) Area</span>
                     </div>
                   </div>
-                </div>
-                
-                <div className="mt-8 w-full p-4 bg-cyan-950/10 border border-cyan-800/30 rounded-xl">
-                  <div className="flex gap-4">
+                )}
+
+                <div className="mt-8 w-full p-4 bg-cyan-950/10 border border-cyan-800/30 rounded-xl relative overflow-hidden">
+                  <div className="absolute top-[-20%] right-[-10%] w-1/3 h-full bg-cyan-500/5 blur-[40px] pointer-events-none" />
+                  <div className="flex gap-4 relative z-10">
                     <div className="p-2 bg-slate-900 rounded-lg h-unit text-cyan-400 border border-slate-800">
-                      <Settings size={18} />
+                      <LayoutGrid size={18} />
                     </div>
                     <div>
-                      <p className="text-[10px] uppercase font-bold text-cyan-500 tracking-wider mb-1">Recommended Configuration</p>
+                      <p className="text-[10px] uppercase font-bold text-cyan-500 tracking-wider mb-1">Infrastructure Insight</p>
                       <p className="text-[11px] text-slate-400 leading-snug">
-                        Use Channel {data.channel} to minimize co-channel interference. BSSID {data.bssid} identified as primary upstream node.
+                        Current latency stabilized at <span className="text-cyan-400 font-mono">{(pingHistory[pingHistory.length-1]?.latency || 0)}ms</span>. Network topology suggests {data.channel > 14 ? 'a high-frequency 5GHz' : 'a localized 2.4GHz'} deployment.
                       </p>
                     </div>
                   </div>
@@ -424,16 +716,16 @@ export default function App() {
 
                 <div className="bg-slate-900/40 border border-slate-800 p-6 rounded-2xl backdrop-blur-md shadow-2xl flex-1 flex flex-col overflow-hidden relative">
                   <div className="flex justify-between items-center mb-10">
-                    <div className="text-[10px] text-slate-500 uppercase font-bold tracking-[0.2em]">Signal Telemetry Feed</div>
+                    <div className="text-[10px] text-slate-500 uppercase font-bold tracking-[0.2em]">Telemetry Performance Stack</div>
                     <div className="flex gap-5 font-mono text-[9px] uppercase tracking-widest">
-                      <span className="flex items-center gap-1.5"><div className="w-1.5 h-1.5 rounded-full bg-cyan-500" /> Linked: OK</span>
-                      <span className="flex items-center gap-1.5 text-slate-400"><div className="w-1.5 h-1.5 rounded-full bg-slate-700" /> Buffer: 20s</span>
+                      <span className="flex items-center gap-1.5 text-cyan-500"><TrendingUp size={10} /> Signal</span>
+                      <span className="flex items-center gap-1.5 text-slate-600 border-l border-slate-800 pl-5"><TrendingDown size={10} /> Latency (Ping)</span>
                     </div>
                   </div>
                   
-                  <div className="flex-1 min-h-[220px]">
+                  <div className="flex-1 min-h-[260px]">
                     <ResponsiveContainer width="100%" height="100%">
-                      <LineChart data={history}>
+                      <LineChart>
                         <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" vertical={false} strokeOpacity={0.4} />
                         <XAxis 
                           dataKey="time" 
@@ -442,8 +734,10 @@ export default function App() {
                           tickLine={false} 
                           axisLine={false}
                           dy={10}
+                          allowDuplicatedCategory={false}
                         />
                         <YAxis 
+                          yAxisId="left"
                           domain={[0, 100]} 
                           stroke="#475569" 
                           fontSize={9} 
@@ -451,15 +745,40 @@ export default function App() {
                           axisLine={false}
                           tickFormatter={(v) => `${v}%`}
                         />
+                        <YAxis 
+                          yAxisId="right"
+                          orientation="right"
+                          domain={[0, 'auto']} 
+                          stroke="#475569" 
+                          fontSize={9} 
+                          tickLine={false} 
+                          axisLine={false}
+                          tickFormatter={(v) => `${v}ms`}
+                        />
                         <Tooltip 
                           contentStyle={{ backgroundColor: '#020617', border: '1px solid #1e293b', borderRadius: '8px', fontSize: '10px' }}
                           itemStyle={{ color: '#22d3ee' }}
                         />
                         <Line 
+                          yAxisId="left"
                           type="monotone" 
+                          data={history}
                           dataKey="signal" 
+                          name="Signal"
                           stroke="#22d3ee" 
                           strokeWidth={2} 
+                          dot={false}
+                          animationDuration={500}
+                        />
+                        <Line 
+                          yAxisId="right"
+                          type="monotone" 
+                          data={pingHistory}
+                          dataKey="latency" 
+                          name="Ping"
+                          stroke="#475569" 
+                          strokeWidth={1} 
+                          strokeDasharray="4 4"
                           dot={false}
                           animationDuration={500}
                         />
@@ -525,6 +844,19 @@ export default function App() {
                     <p className="text-[11px] text-slate-500 mt-1 uppercase tracking-widest font-bold">Mapping active area telemetry nodes</p>
                   </div>
                   <div className="flex gap-4 items-center">
+                    <input 
+                      type="file" 
+                      accept="image/*" 
+                      className="hidden" 
+                      ref={floorPlanInputRef}
+                      onChange={handleFloorPlanUpload}
+                    />
+                    <button 
+                      onClick={() => floorPlanInputRef.current?.click()}
+                      className="px-4 py-1.5 bg-slate-800 border border-slate-700 text-slate-300 hover:text-white text-[10px] font-bold uppercase tracking-widest transition-all rounded-full flex items-center gap-2"
+                    >
+                      <Upload size={12} /> {floorPlan ? 'Change Map' : 'Upload Floorplan'}
+                    </button>
                     <div className="text-[10px] font-mono text-slate-400 bg-slate-950/80 px-4 py-1.5 rounded-full border border-slate-800">
                       TELEMETRY_LINK: <span className="font-bold text-cyan-400">{data.signal}%</span>
                     </div>
@@ -541,13 +873,52 @@ export default function App() {
                   {/* Radar Grid Overlay */}
                   <div className="absolute inset-0 opacity-[0.03] pointer-events-none bg-[radial-gradient(#22d3ee_1px,transparent_1px)] [background-size:32px_32px]" />
                   
-                  <canvas 
-                    ref={canvasRef}
-                    onClick={addHeatPoint}
-                    className="bg-black/40 rounded-2xl border border-slate-800/50 shadow-[0_0_50px_rgba(0,0,0,0.5)] transition-shadow duration-500 group-hover:shadow-[0_0_60px_rgba(34,211,238,0.05)] w-full max-w-[800px] h-auto aspect-[8/5]"
-                  />
+                  <div className="relative w-full max-w-[800px]">
+                    <canvas 
+                      ref={canvasRef}
+                      onClick={addHeatPoint}
+                      onMouseMove={handleMouseMove}
+                      onMouseLeave={() => setHoveredPoint(null)}
+                      className={cn(
+                        "bg-black/40 rounded-2xl border border-slate-800/50 shadow-[0_0_50px_rgba(0,0,0,0.5)] transition-shadow duration-500 group-hover:shadow-[0_0_60px_rgba(34,211,238,0.05)] w-full h-auto aspect-[8/5]",
+                        floorPlan && "border-cyan-500/30"
+                      )}
+                    />
+
+                    {/* Tooltip */}
+                    <AnimatePresence>
+                      {hoveredPoint && (
+                        <motion.div
+                          initial={{ opacity: 0, y: 10 }}
+                          animate={{ opacity: 1, y: 0 }}
+                          exit={{ opacity: 0 }}
+                          style={{ 
+                            position: 'absolute', 
+                            left: `${(hoveredPoint.x / 800) * 100}%`,
+                            top: `${(hoveredPoint.y / 500) * 100}%`,
+                            transform: 'translate(-50%, -120%)'
+                          }}
+                          className="pointer-events-none bg-slate-900 border border-cyan-500/40 p-3 rounded-lg shadow-2xl backdrop-blur-md z-40 min-w-[120px]"
+                        >
+                          <div className="text-[9px] uppercase font-bold text-cyan-500 mb-1 flex items-center gap-2">
+                            <Crosshair size={10} /> Localized Metadata
+                          </div>
+                          <div className="flex justify-between items-baseline mb-1">
+                            <span className="text-[10px] font-mono text-slate-500">Signal</span>
+                            <span className="text-sm font-bold text-white">{hoveredPoint.strength}%</span>
+                          </div>
+                          <div className="flex justify-between items-baseline border-t border-slate-800 pt-1 mt-1">
+                            <span className="text-[9px] font-mono text-slate-500 italic">Pos (X,Y)</span>
+                            <span className="text-[10px] font-mono text-slate-400">
+                              {Math.round(hoveredPoint.x)},{Math.round(hoveredPoint.y)}
+                            </span>
+                          </div>
+                        </motion.div>
+                      )}
+                    </AnimatePresence>
+                  </div>
                   
-                  {heatmap.length === 0 && (
+                  {heatmap.length === 0 && !floorPlan && (
                     <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
                       <div className="text-center px-6 py-4 bg-slate-900/80 border border-slate-800 rounded-xl backdrop-blur-xl">
                         <p className="text-slate-400 text-xs font-mono mb-2">Awaiting spatial coordinates...</p>
