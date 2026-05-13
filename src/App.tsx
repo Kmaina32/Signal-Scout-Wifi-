@@ -120,7 +120,7 @@ const SpeedGauge = ({ value = 0, max = 1000, label, unit, color = "#22d3ee" }: {
             animate={{ opacity: 1, y: 0 }}
             className="text-2xl font-black text-white font-mono tracking-tighter"
           >
-            {(safeValue ?? 0).toFixed(1)}
+            {Number(safeValue || 0).toFixed(1)}
           </motion.span>
           <span className="text-[9px] font-bold text-slate-500 uppercase">{unit}</span>
         </div>
