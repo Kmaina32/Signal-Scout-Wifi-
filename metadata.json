@@ -1,6 +1,6 @@
 {
   "name": "Signal Scout Pro",
-  "description": "Professional Wi-Fi diagnostic suite. Requires local deployment for real-time hardware telemetry and spatial signal mapping.",
+  "description": "Professional Wi-Fi spectrum analyzer and real-time network diagnostic tool. Monitor signal strength, latency, and true internet speeds with hardware telemetry.",
   "requestFramePermissions": [],
   "majorCapabilities": []
 }

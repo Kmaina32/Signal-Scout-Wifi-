@@ -58,21 +58,20 @@ async function startServer() {
   // Request Logging
   app.use((req, res, next) => {
     if (req.url.startsWith('/api')) {
-      console.log(`[API] ${req.method} ${req.url}`);
+      console.log(`[API REQUEST] ${req.method} ${req.url}`);
     }
     next();
   });
 
-  const apiRouter = express.Router();
-
   // Health check
-  apiRouter.get("/health", (req, res) => {
+  app.get("/api/health", (req, res) => {
     res.json({ status: "ok" });
   });
 
   // Diagnostic: Ping & Jitter
-  apiRouter.get("/ping", async (req, res) => {
+  app.get("/api/ping", async (req, res) => {
     const target = (req.query.target as string) || "8.8.8.8";
+    console.log(`[API PING] Target: ${target}`);
     try {
       const countFlag = process.platform === "win32" ? "-n 1" : "-c 1";
       const { stdout } = await execAsync(`ping ${countFlag} ${target}`);
@@ -91,9 +90,10 @@ async function startServer() {
   });
 
   // Wi-Fi Diagnostic Endpoint
-  apiRouter.get("/wifi", async (req, res) => {
+  app.get("/api/wifi", async (req, res) => {
     const { source } = req.query;
     const platform = process.platform;
+    console.log(`[API WIFI] Platform: ${platform}, Source: ${source}`);
     
     try {
       if (source === "simulated") throw new Error("Simulated mode requested.");
@@ -189,8 +189,9 @@ async function startServer() {
     }
   });
 
-  apiRouter.get("/networks", async (req, res) => {
+  app.get("/api/networks", async (req, res) => {
     const platform = process.platform;
+    console.log(`[API NETWORKS] Platform: ${platform}`);
     try {
       if (platform === "win32") {
         const { stdout } = await execAsync("netsh wlan show networks mode=bssid");
@@ -212,9 +213,6 @@ async function startServer() {
       });
     }
   });
-
-  // Mount API router
-  app.use("/api", apiRouter);
 
   // Catch-all for missing API routes
   app.all("/api/*", (req, res) => {

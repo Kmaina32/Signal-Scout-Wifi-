@@ -66,8 +66,9 @@ interface HeatPoint {
 // --- Components ---
 
 // RPM Style Speed Gauge Component
-const SpeedGauge = ({ value, max = 1000, label, unit, color = "#22d3ee" }: { value: number, max?: number, label: string, unit: string, color?: string }) => {
-  const percentage = Math.min(100, (value / max) * 100);
+const SpeedGauge = ({ value = 0, max = 1000, label, unit, color = "#22d3ee" }: { value?: number, max?: number, label: string, unit: string, color?: string }) => {
+  const safeValue = value || 0;
+  const percentage = Math.min(100, (safeValue / max) * 100);
   const rotation = (percentage * 1.8) - 90; // -90 to +90 degrees for a semi-circle
 
   return (
@@ -114,12 +115,12 @@ const SpeedGauge = ({ value, max = 1000, label, unit, color = "#22d3ee" }: { val
       <div className="text-center z-10">
         <div className="flex items-baseline justify-center gap-1">
           <motion.span 
-            key={value}
+            key={safeValue}
             initial={{ opacity: 0, y: 5 }}
             animate={{ opacity: 1, y: 0 }}
             className="text-2xl font-black text-white font-mono tracking-tighter"
           >
-            {value.toFixed(1)}
+            {safeValue.toFixed(1)}
           </motion.span>
           <span className="text-[9px] font-bold text-slate-500 uppercase">{unit}</span>
         </div>
