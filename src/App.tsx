@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { 
   Wifi, 
   Activity, 
@@ -50,6 +50,8 @@ interface WifiData {
   channel: number;
   rx_rate: number;
   tx_rate: number;
+  internet_dl: number;
+  last_wan_update: string;
   timestamp: number;
   isSimulated: boolean;
 }
@@ -130,7 +132,6 @@ export default function App() {
   const [isAiLoading, setIsAiLoading] = useState(false);
   const [aiResult, setAiResult] = useState<DiagnosticResult | null>(null);
   const [spectralData, setSpectralData] = useState<any[]>([]);
-  const [pingHistory, setPingHistory] = useState<any[]>([]);
   const [hoveredPoint, setHoveredPoint] = useState<HeatPoint | null>(null);
   const [floorPlan, setFloorPlan] = useState<string | null>(null);
   
@@ -182,19 +183,6 @@ export default function App() {
     fetchSpectral();
   }, []);
 
-  // Ping Loop
-  useEffect(() => {
-    const fetchPing = async () => {
-      try {
-        const res = await fetch('/api/ping');
-        const data = await res.json();
-        setPingHistory(prev => [...prev.slice(-19), { time: new Date().toLocaleTimeString([], { hour12: false, minute: '2-digit', second: '2-digit' }), latency: data.latency }]);
-      } catch (e) {}
-    };
-    const interval = setInterval(fetchPing, 2000);
-    return () => clearInterval(interval);
-  }, []);
-
   // AI Diagnostic Trigger
   const runAiDiagnostic = async () => {
     if (!data) return;
@@ -218,43 +206,42 @@ export default function App() {
     const fetchStats = async () => {
       try {
         const query = settings.dataSource !== 'auto' ? `?source=${settings.dataSource}` : '';
-        const res = await fetch(`/api/wifi${query}`);
-        const contentType = res.headers.get("content-type");
+        const wifiRes = await fetch(`/api/wifi${query}`);
+        const pingRes = await fetch('/api/ping');
         
-        if (!contentType || !contentType.includes("application/json")) {
-          // If we got HTML (e.g. from a proxy error page), don't try to parse as JSON
-          setError("Network infrastructure error: Received non-JSON response from server.");
-          return;
-        }
-
-        const newData = await res.json();
+        const wifiData = await wifiRes.json();
+        const pingData = await pingRes.json();
         
-        // Handle cases where the server returned a 200 but with an error property
-        if (newData.error) {
-          setError(newData.message || "Hardware unavailable");
-          setData(newData); // Keep the skeleton data for UI
+        if (wifiData.error) {
+          setError(wifiData.message || "Hardware unavailable");
+          setData(wifiData);
           return;
         }
 
         setError(null);
-        setData(newData);
+        setData(wifiData);
+        
+        const timeStr = new Date(wifiData.timestamp).toLocaleTimeString([], { hour12: false, minute: '2-digit', second: '2-digit' });
+        
         setHistory(prev => {
           const next = [...prev, { 
-            time: new Date(newData.timestamp).toLocaleTimeString([], { hour12: false, minute: '2-digit', second: '2-digit' }), 
-            signal: newData.signal 
+            time: timeStr, 
+            signal: wifiData.signal,
+            latency: pingData.latency || 0,
+            internet_speed: wifiData.internet_dl || 0
           }];
           return next.slice(-20); 
         });
 
         if (previousSignal !== null) {
-          if (newData.signal > previousSignal) setDirection('better');
-          else if (newData.signal < previousSignal) setDirection('worse');
-          else if (newData.signal === previousSignal) setDirection('stable');
+          if (wifiData.signal > previousSignal) setDirection('better');
+          else if (wifiData.signal < previousSignal) setDirection('worse');
+          else if (wifiData.signal === previousSignal) setDirection('stable');
         } else {
-          setPreviousSignal(newData.signal);
+          setPreviousSignal(wifiData.signal);
         }
       } catch (e) {
-        console.error("Failed to fetch wifi data", e);
+        console.error("Failed to fetch telemetry data", e);
       }
     };
 
@@ -396,7 +383,7 @@ export default function App() {
         </div>
         <h2 className="text-xl font-bold text-white mb-2 uppercase tracking-tight">Hardware Integration Required</h2>
         <p className="text-slate-400 text-sm leading-relaxed mb-6">
-          {error}
+          Hardware access failed. Returning simulated data for UI testing.
         </p>
         <div className="p-4 bg-slate-950/50 rounded-xl border border-slate-800 text-left mb-6">
           <p className="text-[10px] font-mono text-slate-500 uppercase mb-2">To use your actual Wi-Fi:</p>
@@ -406,12 +393,23 @@ export default function App() {
             <li>3. Start local host: <code className="text-cyan-400">npm run dev</code></li>
           </ul>
         </div>
-        <button 
-          onClick={() => window.location.reload()}
-          className="w-full py-3 bg-cyan-500 text-white rounded-xl font-bold uppercase tracking-widest text-xs shadow-lg shadow-cyan-500/20 hover:bg-cyan-400 transition-all"
-        >
-          Check Again
-        </button>
+        <div className="flex flex-col gap-3">
+          <button 
+            onClick={() => window.location.reload()}
+            className="w-full py-3 bg-cyan-500 text-white rounded-xl font-bold uppercase tracking-widest text-xs shadow-lg shadow-cyan-500/20 hover:bg-cyan-400 transition-all font-sans"
+          >
+            Check Again
+          </button>
+          <button 
+            onClick={() => {
+              setSettings(s => ({ ...s, dataSource: 'simulated' }));
+              setError(null);
+            }}
+            className="w-full py-3 bg-slate-800 text-slate-300 rounded-xl font-bold uppercase tracking-widest text-[10px] hover:bg-slate-700 transition-all font-sans border border-slate-700"
+          >
+            Access Anyway
+          </button>
+        </div>
       </div>
     </div>
   );
@@ -448,139 +446,141 @@ export default function App() {
       <div className="glow-overlay top-[-10%] left-[-10%] w-[40%] h-[40%] bg-cyan-900/15 rounded-full blur-[120px]" />
       <div className="glow-overlay bottom-[-10%] right-[-10%] w-[50%] h-[50%] bg-emerald-900/10 rounded-full blur-[150px]" />
 
-      <header className="relative z-10 flex justify-between items-end border-b border-slate-800/50 pb-8 mb-10">
-        <div>
-          <h1 className="text-[10px] font-bold uppercase tracking-[0.4em] text-cyan-500 mb-2">Active Diagnostic System</h1>
-          <div className="flex items-center gap-4">
-            <span className="text-3xl font-light tracking-tight text-white flex items-center gap-3">
-              Signal Scout <span className="text-slate-700 font-mono tracking-normal text-lg">PRO</span>
-            </span>
-            <span className="px-2.5 py-1 rounded bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-[9px] font-mono tracking-widest animate-pulse flex items-center gap-1.5">
-              <div className="w-1 h-1 bg-emerald-400 rounded-full" />
-              LOCAL_HOST:RUNNING
-            </span>
-          </div>
-        </div>
-        
-        <div className="flex items-center gap-6">
-          <div className="flex bg-slate-900/50 border border-slate-800 p-1 rounded-xl">
-            <button 
-              onClick={() => setView('dashboard')}
-              className={cn("px-4 py-2 rounded-lg text-xs font-bold uppercase tracking-widest transition-all", view === 'dashboard' ? "bg-cyan-500 text-white shadow-lg shadow-cyan-500/20" : "text-slate-500 hover:text-slate-300")}
-            >
-              Telemetry
-            </button>
-            <button 
-              onClick={() => setView('heatmap')}
-              className={cn("px-4 py-2 rounded-lg text-xs font-bold uppercase tracking-widest transition-all", view === 'heatmap' ? "bg-cyan-500 text-white shadow-lg shadow-cyan-500/20" : "text-slate-500 hover:text-slate-300")}
-            >
-              Spatial
-            </button>
-            <button 
-              onClick={() => setView('security')}
-              className={cn("px-4 py-2 rounded-lg text-xs font-bold uppercase tracking-widest transition-all", view === 'security' ? "bg-indigo-500 text-white shadow-lg shadow-indigo-500/20" : "text-slate-500 hover:text-slate-300")}
-            >
-              Audit
-            </button>
+      <header className="sticky top-0 z-[100] bg-[#020617]/90 backdrop-blur-xl border-b border-white/5 px-6 py-4 mb-10">
+        <div className="flex justify-between items-end">
+          <div>
+            <h1 className="text-[10px] font-bold uppercase tracking-[0.4em] text-cyan-500 mb-2">Active Diagnostic System</h1>
+            <div className="flex items-center gap-4">
+              <span className="text-3xl font-light tracking-tight text-white flex items-center gap-3">
+                Signal Scout <span className="text-slate-700 font-mono tracking-normal text-lg">PRO</span>
+              </span>
+              <span className="px-2.5 py-1 rounded bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-[9px] font-mono tracking-widest animate-pulse flex items-center gap-1.5">
+                <div className="w-1 h-1 bg-emerald-400 rounded-full" />
+                LOCAL_HOST:RUNNING
+              </span>
+            </div>
           </div>
           
-          <div className="relative">
-            <button 
-              onClick={() => setIsSettingsOpen(!isSettingsOpen)}
-              className={cn(
-                "p-2.5 rounded-xl border transition-all",
-                isSettingsOpen ? "bg-slate-800 border-slate-700 text-cyan-400" : "bg-slate-900 border-slate-800 text-slate-500 hover:border-slate-700"
-              )}
-            >
-              <Settings size={18} />
-            </button>
+          <div className="flex items-center gap-6">
+            <div className="flex bg-slate-900/50 border border-white/10 p-1 rounded-xl">
+              <button 
+                onClick={() => setView('dashboard')}
+                className={cn("px-4 py-2 rounded-lg text-xs font-bold uppercase tracking-widest transition-all", view === 'dashboard' ? "bg-cyan-500 text-white shadow-lg shadow-cyan-500/20" : "text-slate-500 hover:text-slate-300")}
+              >
+                Telemetry
+              </button>
+              <button 
+                onClick={() => setView('heatmap')}
+                className={cn("px-4 py-2 rounded-lg text-xs font-bold uppercase tracking-widest transition-all", view === 'heatmap' ? "bg-cyan-500 text-white shadow-lg shadow-cyan-500/20" : "text-slate-500 hover:text-slate-300")}
+              >
+                Spatial
+              </button>
+              <button 
+                onClick={() => setView('security')}
+                className={cn("px-4 py-2 rounded-lg text-xs font-bold uppercase tracking-widest transition-all", view === 'security' ? "bg-indigo-500 text-white shadow-lg shadow-indigo-500/20" : "text-slate-500 hover:text-slate-300")}
+              >
+                Audit
+              </button>
+            </div>
+            
+            <div className="relative">
+              <button 
+                onClick={() => setIsSettingsOpen(!isSettingsOpen)}
+                className={cn(
+                  "p-2.5 rounded-xl border transition-all",
+                  isSettingsOpen ? "bg-slate-800 border-slate-700 text-cyan-400" : "bg-slate-900 border-slate-800 text-slate-500 hover:border-slate-700"
+                )}
+              >
+                <Settings size={18} />
+              </button>
 
-            <AnimatePresence>
-              {isSettingsOpen && (
-                <motion.div
-                  initial={{ opacity: 0, y: 10, scale: 0.95 }}
-                  animate={{ opacity: 1, y: 0, scale: 1 }}
-                  exit={{ opacity: 0, y: 10, scale: 0.95 }}
-                  className="absolute right-0 mt-3 w-64 bg-slate-900/95 border border-slate-700 rounded-2xl p-5 shadow-2xl backdrop-blur-xl z-50"
-                >
-                  <p className="text-[10px] font-bold uppercase tracking-widest text-cyan-500 mb-4 flex items-center gap-2">
-                    <Settings size={12} /> System Configuration
-                  </p>
-                  
-                  <div className="space-y-4">
-                    <div>
-                      <label className="text-[9px] uppercase font-bold text-slate-500 mb-1.5 block">Refresh Rate (ms)</label>
-                      <select 
-                        value={settings.refreshRate}
-                        onChange={(e) => setSettings(s => ({ ...s, refreshRate: parseInt(e.target.value) }))}
-                        className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-cyan-500"
-                      >
-                        <option value={500}>500ms (High Perf)</option>
-                        <option value={1000}>1000ms (Standard)</option>
-                        <option value={1500}>1500ms (Power Save)</option>
-                        <option value={3000}>3000ms (Passive)</option>
-                      </select>
+              <AnimatePresence>
+                {isSettingsOpen && (
+                  <motion.div
+                    initial={{ opacity: 0, y: 10, scale: 0.95 }}
+                    animate={{ opacity: 1, y: 0, scale: 1 }}
+                    exit={{ opacity: 0, y: 10, scale: 0.95 }}
+                    className="absolute right-0 mt-3 w-64 bg-slate-900/95 border border-slate-700 rounded-2xl p-5 shadow-2xl backdrop-blur-xl z-[200]"
+                  >
+                    <p className="text-[10px] font-bold uppercase tracking-widest text-cyan-500 mb-4 flex items-center gap-2">
+                      <Settings size={12} /> System Configuration
+                    </p>
+                    
+                    <div className="space-y-4">
+                      <div>
+                        <label className="text-[9px] uppercase font-bold text-slate-500 mb-1.5 block">Refresh Rate (ms)</label>
+                        <select 
+                          value={settings.refreshRate}
+                          onChange={(e) => setSettings(s => ({ ...s, refreshRate: parseInt(e.target.value) }))}
+                          className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-cyan-500"
+                        >
+                          <option value={500}>500ms (High Perf)</option>
+                          <option value={1000}>1000ms (Standard)</option>
+                          <option value={1500}>1500ms (Power Save)</option>
+                          <option value={3000}>3000ms (Passive)</option>
+                        </select>
+                      </div>
+
+                      <div>
+                        <label className="text-[9px] uppercase font-bold text-slate-500 mb-1.5 block">Telemetry Source</label>
+                        <select 
+                          value={settings.dataSource}
+                          onChange={(e) => setSettings(s => ({ ...s, dataSource: e.target.value }))}
+                          className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-cyan-500"
+                        >
+                          <option value="auto">Auto Detect Host</option>
+                          <option value="netsh">Windows (netsh)</option>
+                          <option value="nmcli">Linux (nmcli)</option>
+                          <option value="airport">macOS (airport)</option>
+                          <option value="simulated">Simulated Data</option>
+                        </select>
+                      </div>
+
+                      <div className="flex items-center justify-between py-2 border-t border-slate-800 pt-3">
+                        <label className="text-[9px] uppercase font-bold text-slate-500">AI Panel</label>
+                        <button 
+                          onClick={() => setSettings(s => ({ ...s, showAIPanel: !s.showAIPanel }))}
+                          className={cn("w-10 h-5 rounded-full relative transition-colors p-1", settings.showAIPanel ? "bg-cyan-500" : "bg-slate-800")}
+                        >
+                          <motion.div animate={{ x: settings.showAIPanel ? 20 : 0 }} className="w-3 h-3 bg-white rounded-full shadow-sm" />
+                        </button>
+                      </div>
+
+                      <div className="flex items-center justify-between py-1">
+                        <label className="text-[9px] uppercase font-bold text-slate-500">Spectral Scanner</label>
+                        <button 
+                          onClick={() => setSettings(s => ({ ...s, showSpectralScanner: !s.showSpectralScanner }))}
+                          className={cn("w-10 h-5 rounded-full relative transition-colors p-1", settings.showSpectralScanner ? "bg-cyan-500" : "bg-slate-800")}
+                        >
+                          <motion.div animate={{ x: settings.showSpectralScanner ? 20 : 0 }} className="w-3 h-3 bg-white rounded-full shadow-sm" />
+                        </button>
+                      </div>
+
+                      <div className="flex items-center justify-between py-2 border-t border-slate-800 pt-3">
+                        <label className="text-[9px] uppercase font-bold text-slate-500">Navigation Aid</label>
+                        <button 
+                          onClick={() => setSettings(s => ({ ...s, showGuidance: !s.showGuidance }))}
+                          className={cn(
+                            "w-10 h-5 rounded-full relative transition-colors p-1",
+                            settings.showGuidance ? "bg-cyan-500" : "bg-slate-800"
+                          )}
+                        >
+                          <motion.div 
+                            animate={{ x: settings.showGuidance ? 20 : 0 }}
+                            className="w-3 h-3 bg-white rounded-full shadow-sm"
+                          />
+                        </button>
+                      </div>
                     </div>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </div>
 
-                    <div>
-                      <label className="text-[9px] uppercase font-bold text-slate-500 mb-1.5 block">Telemetry Source</label>
-                      <select 
-                        value={settings.dataSource}
-                        onChange={(e) => setSettings(s => ({ ...s, dataSource: e.target.value }))}
-                        className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-cyan-500"
-                      >
-                        <option value="auto">Auto Detect Host</option>
-                        <option value="netsh">Windows (netsh)</option>
-                        <option value="nmcli">Linux (nmcli)</option>
-                        <option value="airport">macOS (airport)</option>
-                        <option value="simulated">Simulated Data</option>
-                      </select>
-                    </div>
-
-                    <div className="flex items-center justify-between py-2 border-t border-slate-800 pt-3">
-                      <label className="text-[9px] uppercase font-bold text-slate-500">AI Panel</label>
-                      <button 
-                        onClick={() => setSettings(s => ({ ...s, showAIPanel: !s.showAIPanel }))}
-                        className={cn("w-10 h-5 rounded-full relative transition-colors p-1", settings.showAIPanel ? "bg-cyan-500" : "bg-slate-800")}
-                      >
-                        <motion.div animate={{ x: settings.showAIPanel ? 20 : 0 }} className="w-3 h-3 bg-white rounded-full shadow-sm" />
-                      </button>
-                    </div>
-
-                    <div className="flex items-center justify-between py-1">
-                      <label className="text-[9px] uppercase font-bold text-slate-500">Spectral Scanner</label>
-                      <button 
-                        onClick={() => setSettings(s => ({ ...s, showSpectralScanner: !s.showSpectralScanner }))}
-                        className={cn("w-10 h-5 rounded-full relative transition-colors p-1", settings.showSpectralScanner ? "bg-cyan-500" : "bg-slate-800")}
-                      >
-                        <motion.div animate={{ x: settings.showSpectralScanner ? 20 : 0 }} className="w-3 h-3 bg-white rounded-full shadow-sm" />
-                      </button>
-                    </div>
-
-                    <div className="flex items-center justify-between py-2 border-t border-slate-800 pt-3">
-                      <label className="text-[9px] uppercase font-bold text-slate-500">Navigation Aid</label>
-                      <button 
-                        onClick={() => setSettings(s => ({ ...s, showGuidance: !s.showGuidance }))}
-                        className={cn(
-                          "w-10 h-5 rounded-full relative transition-colors p-1",
-                          settings.showGuidance ? "bg-cyan-500" : "bg-slate-800"
-                        )}
-                      >
-                        <motion.div 
-                          animate={{ x: settings.showGuidance ? 20 : 0 }}
-                          className="w-3 h-3 bg-white rounded-full shadow-sm"
-                        />
-                      </button>
-                    </div>
-                  </div>
-                </motion.div>
-              )}
-            </AnimatePresence>
-          </div>
-
-          <div className="hidden md:block text-right font-mono text-[10px] text-slate-500 leading-relaxed uppercase">
-            REFRESH: {settings.refreshRate}MS<br/>
-            SOURCE: {settings.dataSource.toUpperCase()}
+            <div className="hidden md:block text-right font-mono text-[10px] text-slate-500 leading-relaxed uppercase">
+              REFRESH: {settings.refreshRate}MS<br/>
+              SOURCE: {settings.dataSource.toUpperCase()}
+            </div>
           </div>
         </div>
       </header>
@@ -739,7 +739,7 @@ export default function App() {
                           </>
                         ) : (
                           <>
-                            Current latency stabilized at <span className="text-cyan-400 font-mono">{(pingHistory[pingHistory.length-1]?.latency || 0)}ms</span>. 
+                            Current latency stabilized at <span className="text-cyan-400 font-mono">{(history[history.length-1]?.latency || 0)}ms</span>. 
                             Network topology suggests {data.channel > 14 ? 'a high-frequency 5GHz' : 'a localized 2.4GHz'} deployment.
                           </>
                         )}
@@ -751,24 +751,34 @@ export default function App() {
 
               {/* Metric Grid Column */}
               <div className="lg:col-span-7 flex flex-col gap-8">
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  <MetricCard 
-                    title="Active Network" 
-                    value={data.ssid} 
-                    secondary={`CH ${data.channel}`}
-                  />
-                  <MetricCard 
-                    title="Hardware Protocol" 
-                    value={data.radio} 
-                    secondary="AES-CCMP"
-                  />
-                </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                    <MetricCard 
+                      title="Active Network" 
+                      value={data.ssid} 
+                      secondary={`CH ${data.channel}`}
+                    />
+                    <MetricCard 
+                      title="Local Link Speed" 
+                      value={data.rx_rate} 
+                      unit="Mbps"
+                      colorClass="text-cyan-400"
+                      secondary="PC-TO-ROUTER"
+                    />
+                    <MetricCard 
+                      title="True Internet Speed" 
+                      value={data.internet_dl} 
+                      unit="Mbps"
+                      colorClass="text-emerald-400"
+                      secondary={`UPDATED: ${data.last_wan_update}`}
+                    />
+                  </div>
 
                 <div className="bg-slate-900/40 border border-slate-800 p-6 rounded-2xl backdrop-blur-md shadow-2xl flex-1 flex flex-col overflow-hidden relative">
                   <div className="flex justify-between items-center mb-10">
                     <div className="text-[10px] text-slate-500 uppercase font-bold tracking-[0.2em]">Telemetry Performance Stack</div>
                     <div className="flex gap-5 font-mono text-[9px] uppercase tracking-widest">
                       <span className="flex items-center gap-1.5 text-cyan-500"><TrendingUp size={10} /> Signal</span>
+                      <span className="flex items-center gap-1.5 text-emerald-500 border-l border-slate-800 pl-5"><Download size={10} /> Internet (Mbps)</span>
                       <span className="flex items-center gap-1.5 text-slate-600 border-l border-slate-800 pl-5"><TrendingDown size={10} /> Latency (Ping)</span>
                     </div>
                   </div>
@@ -787,7 +797,7 @@ export default function App() {
                         />
                         <YAxis 
                           yAxisId="left"
-                          domain={[0, 100]} 
+                          domain={[0, 'auto']} 
                           stroke="#475569" 
                           fontSize={9} 
                           tickLine={false} 
@@ -806,14 +816,23 @@ export default function App() {
                         />
                         <Tooltip 
                           contentStyle={{ backgroundColor: '#020617', border: '1px solid #1e293b', borderRadius: '8px', fontSize: '10px' }}
-                          itemStyle={{ color: '#22d3ee' }}
                         />
                         <Line 
                           yAxisId="left"
                           type="monotone" 
                           dataKey="signal" 
-                          name="Signal"
+                          name="Signal (%)"
                           stroke="#22d3ee" 
+                          strokeWidth={2} 
+                          dot={false}
+                          animationDuration={500}
+                        />
+                        <Line 
+                          yAxisId="left"
+                          type="monotone" 
+                          dataKey="internet_speed" 
+                          name="Internet (Mbps)"
+                          stroke="#10b981" 
                           strokeWidth={2} 
                           dot={false}
                           animationDuration={500}
@@ -821,9 +840,8 @@ export default function App() {
                         <Line 
                           yAxisId="right"
                           type="monotone" 
-                          data={pingHistory}
                           dataKey="latency" 
-                          name="Ping"
+                          name="Ping (ms)"
                           stroke="#475569" 
                           strokeWidth={1} 
                           strokeDasharray="4 4"

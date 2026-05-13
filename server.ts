@@ -3,8 +3,47 @@ import path from "path";
 import { createServer as createViteServer } from "vite";
 import { exec } from "child_process";
 import { promisify } from "util";
+import FastSpeedtest from "fast-speedtest-api";
 
 const execAsync = promisify(exec);
+
+// Global state for speed metrics
+let speedMetrics = {
+  internet_dl: 0,
+  last_wan_update: "Never",
+  is_testing: false
+};
+
+// Background internet speed test
+async function runInternetSpeedTest() {
+  if (speedMetrics.is_testing) return;
+  speedMetrics.is_testing = true;
+  
+  try {
+    const speedtest = new FastSpeedtest({
+      token: "YXdnZW5lcmF0ZW9mZmljaWFsbWFya2V0aW5nc2l0ZTo=", // Default public token
+      verbose: false,
+      timeout: 10000,
+      https: true,
+      urlCount: 5,
+      bufferSize: 8,
+      unit: FastSpeedtest.UNITS.Mbps
+    });
+
+    const speed = await speedtest.getSpeed();
+    speedMetrics.internet_dl = Math.round(speed * 10) / 10;
+    speedMetrics.last_wan_update = new Date().toLocaleTimeString([], { hour12: false, minute: '2-digit', second: '2-digit' });
+  } catch (e) {
+    console.error("Internet speed test failed:", e);
+    speedMetrics.last_wan_update = "Error";
+  } finally {
+    speedMetrics.is_testing = false;
+  }
+}
+
+// Start periodic internet speed tests
+setInterval(runInternetSpeedTest, 60000); // Once a minute to save data
+runInternetSpeedTest();
 
 async function startServer() {
   const app = express();
@@ -47,6 +86,8 @@ async function startServer() {
           channel: parseInt(channel || "0"),
           rx_rate: parseFloat(rx || "0"),
           tx_rate: parseFloat(tx || "0"),
+          internet_dl: speedMetrics.internet_dl,
+          last_wan_update: speedMetrics.last_wan_update,
           timestamp: Date.now(),
           isSimulated: false
         });
@@ -58,12 +99,11 @@ async function startServer() {
         const { stdout } = await execAsync(`${airportPath} -I`);
         
         const rssi = parseInt(stdout.match(/agrCtlRSSI:\s*(-?\d+)/)?.[1] || "0");
-        const noise = parseInt(stdout.match(/agrCtlNoise:\s*(-?\d+)/)?.[1] || "0");
         const ssid = stdout.match(/\sSSID:\s*(.+)$/m)?.[1]?.trim();
         const bssid = stdout.match(/BSSID:\s*(.+)$/m)?.[1]?.trim();
         const channel = stdout.match(/channel:\s*(\d+)/)?.[1];
+        const rate = stdout.match(/lastTxRate:\s*(\d+)/)?.[1] || "0";
         
-        // Convert RSSI to percentage (approximate)
         const signal = Math.min(100, Math.max(0, 2 * (rssi + 100)));
 
         return res.json({
@@ -72,8 +112,10 @@ async function startServer() {
           bssid: bssid || "00:00:00:00:00:00",
           radio: "Apple 802.11",
           channel: parseInt(channel || "0"),
-          rx_rate: 0,
-          tx_rate: 0,
+          rx_rate: parseFloat(rate),
+          tx_rate: parseFloat(rate),
+          internet_dl: speedMetrics.internet_dl,
+          last_wan_update: speedMetrics.last_wan_update,
           timestamp: Date.now(),
           isSimulated: false
         });
@@ -92,6 +134,8 @@ async function startServer() {
           channel: parseInt(chan || "0"),
           rx_rate: parseFloat(rate || "0"),
           tx_rate: 0,
+          internet_dl: speedMetrics.internet_dl,
+          last_wan_update: speedMetrics.last_wan_update,
           timestamp: Date.now(),
           isSimulated: false
         });
@@ -111,6 +155,8 @@ async function startServer() {
         channel: supports6E ? (Math.random() > 0.5 ? 37 : 197) : 6,
         rx_rate: 120.5,
         tx_rate: 98.2,
+        internet_dl: speedMetrics.internet_dl || 42.5,
+        last_wan_update: speedMetrics.last_wan_update === "Never" ? "Simulated" : speedMetrics.last_wan_update,
         timestamp: Date.now(),
         isSimulated: true,
         error: source === "simulated" ? null : "Hardware access failed or unsupported.",
@@ -121,21 +167,6 @@ async function startServer() {
       });
     }
   });
-
-  // Vite middleware for development
-  if (process.env.NODE_ENV !== "production") {
-    const vite = await createViteServer({
-      server: { middlewareMode: true },
-      appType: "spa",
-    });
-    app.use(vite.middlewares);
-  } else {
-    const distPath = path.join(process.cwd(), "dist");
-    app.use(express.static(distPath));
-    app.get("*", (req, res) => {
-      res.sendFile(path.join(distPath, "index.html"));
-    });
-  }
 
   // Diagnostic: Spectral Congestion Scan
   app.get("/api/networks", async (req, res) => {
@@ -182,6 +213,21 @@ async function startServer() {
       res.json({ latency: Math.floor(Math.random() * 20) + 15, target, simulated: true });
     }
   });
+
+  // Vite middleware for development
+  if (process.env.NODE_ENV !== "production") {
+    const vite = await createViteServer({
+      server: { middlewareMode: true },
+      appType: "spa",
+    });
+    app.use(vite.middlewares);
+  } else {
+    const distPath = path.join(process.cwd(), "dist");
+    app.use(express.static(distPath));
+    app.get("*", (req, res) => {
+      res.sendFile(path.join(distPath, "index.html"));
+    });
+  }
 
   app.listen(PORT, "0.0.0.0", () => {
     console.log(`Diagnostic server running on http://localhost:${PORT}`);
