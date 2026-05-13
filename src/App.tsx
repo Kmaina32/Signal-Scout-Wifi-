@@ -65,6 +65,73 @@ interface HeatPoint {
 
 // --- Components ---
 
+// RPM Style Speed Gauge Component
+const SpeedGauge = ({ value, max = 1000, label, unit, color = "#22d3ee" }: { value: number, max?: number, label: string, unit: string, color?: string }) => {
+  const percentage = Math.min(100, (value / max) * 100);
+  const rotation = (percentage * 1.8) - 90; // -90 to +90 degrees for a semi-circle
+
+  return (
+    <div className="relative flex flex-col items-center justify-center p-4 bg-slate-900/50 rounded-3xl border border-slate-800 backdrop-blur-md overflow-hidden group">
+      {/* Background Decorative Arcs */}
+      <div className="absolute inset-x-0 bottom-0 h-1/2 overflow-hidden pointer-events-none">
+        <div className="absolute bottom-[-50%] left-1/2 -translate-x-1/2 w-full aspect-square border-t border-slate-800 rounded-full opacity-50" />
+      </div>
+
+      <div className="relative w-32 h-20 mb-2 overflow-hidden">
+        {/* Gauge Path */}
+        <svg viewBox="0 0 100 50" className="w-full h-full">
+          <path
+            d="M 10 50 A 40 40 0 0 1 90 50"
+            fill="none"
+            stroke="#1e293b"
+            strokeWidth="8"
+            strokeLinecap="round"
+          />
+          <motion.path
+            d="M 10 50 A 40 40 0 0 1 90 50"
+            fill="none"
+            stroke={color}
+            strokeWidth="8"
+            strokeLinecap="round"
+            initial={{ pathLength: 0 }}
+            animate={{ pathLength: percentage / 100 }}
+            transition={{ duration: 1.5, ease: "easeOut" }}
+          />
+        </svg>
+
+        {/* Needle */}
+        <motion.div 
+          className="absolute bottom-0 left-1/2 w-1 h-14 origin-bottom -translate-x-1/2"
+          initial={{ rotate: -90 }}
+          animate={{ rotate: rotation }}
+          transition={{ type: "spring", stiffness: 60, damping: 15 }}
+        >
+          <div className="w-full h-full bg-slate-50 rounded-full shadow-[0_0_10px_rgba(255,255,255,0.5)]" />
+          <div className="absolute bottom-0 left-1/2 -translate-x-1/2 w-3 h-3 bg-slate-50 rounded-full border-2 border-slate-950" />
+        </motion.div>
+      </div>
+
+      <div className="text-center z-10">
+        <div className="flex items-baseline justify-center gap-1">
+          <motion.span 
+            key={value}
+            initial={{ opacity: 0, y: 5 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="text-2xl font-black text-white font-mono tracking-tighter"
+          >
+            {value.toFixed(1)}
+          </motion.span>
+          <span className="text-[9px] font-bold text-slate-500 uppercase">{unit}</span>
+        </div>
+        <p className="text-[10px] font-medium text-slate-400 uppercase tracking-widest mt-1">{label}</p>
+      </div>
+
+      {/* Glossy Overlay */}
+      <div className="absolute inset-0 bg-gradient-to-br from-white/5 to-transparent pointer-events-none rounded-3xl" />
+    </div>
+  );
+};
+
 function MetricCard({ title, value, unit, colorClass, secondary }: { title: string; value: string | number; unit?: string; colorClass?: string; secondary?: string }) {
   return (
     <div className="bg-slate-900/40 border border-slate-800/60 p-5 rounded-xl backdrop-blur-md shadow-lg shadow-black/20">
@@ -178,7 +245,7 @@ export default function App() {
         ];
         setSpectralData(mockSpectral);
       } catch (e) {
-        console.error("Failed to fetch spectral data");
+        console.error("Failed to fetch spectral data:", e);
       }
     };
     fetchSpectral();
@@ -210,26 +277,28 @@ export default function App() {
         const wifiRes = await fetch(`/api/wifi${query}`);
         const pingRes = await fetch('/api/ping');
         
-        const safeJson = async (res: Response) => {
+        const safeJson = async (res: Response, endpoint: string) => {
           if (!res.ok) {
             const text = await res.text();
-            throw new Error(`Status ${res.status}: ${text.substring(0, 100)}`);
+            console.error(`[API Error] ${endpoint} returned ${res.status}:`, text.substring(0, 500));
+            throw new Error(`Status ${res.status}`);
           }
           const contentType = res.headers.get('content-type');
           if (contentType && contentType.includes('application/json')) {
             return await res.json();
           }
           const text = await res.text();
-          throw new Error(`Expected JSON but got ${contentType}: ${text.substring(0, 50)}`);
+          console.error(`[API Error] ${endpoint} returned non-JSON (${contentType}):`, text.substring(0, 500));
+          throw new Error(`Expected JSON but got ${contentType}`);
         };
 
-        const wifiData = await safeJson(wifiRes);
+        const wifiData = await safeJson(wifiRes, '/api/wifi');
         
         let pingData = { latency: 0 };
         try {
-          pingData = await safeJson(pingRes);
+          pingData = await safeJson(pingRes, '/api/ping');
         } catch (e) {
-          console.warn("Ping fetch failed, continuing with zero latency", e);
+          console.warn("Ping fetch failed, continuing with zero latency");
         }
         
         if (wifiData.error) {
@@ -698,8 +767,8 @@ export default function App() {
                       <span className="font-mono text-[9px] text-slate-600 bg-slate-950 px-2 py-0.5 rounded uppercase tracking-normal">WiFi 6E [6GHz] ENABLED</span>
                     </div>
                     
-                    <div className="h-[140px] w-full">
-                      <ResponsiveContainer width="100%" height="100%">
+                    <div className="h-[140px] w-full min-h-[140px]">
+                      <ResponsiveContainer width="100%" height="100%" minWidth={0}>
                         <BarChart data={spectralData}>
                           <Bar dataKey="usage" radius={[3, 3, 0, 0]}>
                             {spectralData.map((entry, index) => (
@@ -771,25 +840,38 @@ export default function App() {
 
               {/* Metric Grid Column */}
               <div className="lg:col-span-7 flex flex-col gap-8">
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                    <MetricCard 
-                      title="Active Network" 
-                      value={data.ssid} 
-                      secondary={`CH ${data.channel}`}
-                    />
-                    <MetricCard 
-                      title="Local Link Speed" 
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
+                    <SpeedGauge 
+                      label="Local Link Capability" 
                       value={data.rx_rate} 
                       unit="Mbps"
-                      colorClass="text-cyan-400"
-                      secondary="PC-TO-ROUTER"
+                      max={1200}
+                      color="#22d3ee"
                     />
-                    <MetricCard 
-                      title="True Internet Speed" 
+                    <SpeedGauge 
+                      label="Internet Performance" 
                       value={data.internet_dl} 
                       unit="Mbps"
-                      colorClass="text-emerald-400"
-                      secondary={`UPDATED: ${data.last_wan_update}`}
+                      max={500}
+                      color="#10b981"
+                    />
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                    <MetricCard 
+                      title="Net Status" 
+                      value={data.ssid} 
+                      secondary={data.isSimulated ? "SIMULATED MODE" : `BSSID: ${data.bssid}`}
+                    />
+                    <MetricCard 
+                      title="Protocol" 
+                      value={data.radio} 
+                      secondary={`CHANNEL ${data.channel}`}
+                    />
+                    <MetricCard 
+                      title="Last WAN Sync" 
+                      value={data.last_wan_update} 
+                      secondary="PING TEST ACTIVE"
                     />
                   </div>
 
@@ -803,8 +885,8 @@ export default function App() {
                     </div>
                   </div>
                   
-                  <div className="flex-1 min-h-[260px]">
-                    <ResponsiveContainer width="100%" height="100%">
+                  <div className="flex-1 min-h-[260px] w-full">
+                    <ResponsiveContainer width="100%" height="100%" minWidth={0}>
                       <LineChart data={history}>
                         <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" vertical={false} strokeOpacity={0.4} />
                         <XAxis 
