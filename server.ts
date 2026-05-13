@@ -55,23 +55,22 @@ async function startServer() {
 
   app.use(express.json());
 
-  // Request Logging
-  app.use((req, res, next) => {
-    if (req.url.startsWith('/api')) {
-      console.log(`[API REQUEST] ${req.method} ${req.url}`);
-    }
+  const apiRouter = express.Router();
+
+  // Request Logging for API
+  apiRouter.use((req, res, next) => {
+    console.log(`[API] ${req.method} ${req.url}`);
     next();
   });
 
   // Health check
-  app.get("/api/health", (req, res) => {
+  apiRouter.get("/health", (req, res) => {
     res.json({ status: "ok" });
   });
 
   // Diagnostic: Ping & Jitter
-  app.get("/api/ping", async (req, res) => {
+  apiRouter.get("/ping", async (req, res) => {
     const target = (req.query.target as string) || "8.8.8.8";
-    console.log(`[API PING] Target: ${target}`);
     try {
       const countFlag = process.platform === "win32" ? "-n 1" : "-c 1";
       const { stdout } = await execAsync(`ping ${countFlag} ${target}`);
@@ -90,10 +89,9 @@ async function startServer() {
   });
 
   // Wi-Fi Diagnostic Endpoint
-  app.get("/api/wifi", async (req, res) => {
+  apiRouter.get("/wifi", async (req, res) => {
     const { source } = req.query;
     const platform = process.platform;
-    console.log(`[API WIFI] Platform: ${platform}, Source: ${source}`);
     
     try {
       if (source === "simulated") throw new Error("Simulated mode requested.");
@@ -189,9 +187,8 @@ async function startServer() {
     }
   });
 
-  app.get("/api/networks", async (req, res) => {
+  apiRouter.get("/networks", async (req, res) => {
     const platform = process.platform;
-    console.log(`[API NETWORKS] Platform: ${platform}`);
     try {
       if (platform === "win32") {
         const { stdout } = await execAsync("netsh wlan show networks mode=bssid");
@@ -214,8 +211,11 @@ async function startServer() {
     }
   });
 
-  // Catch-all for missing API routes
-  app.all("/api/*", (req, res) => {
+  // Mount API router
+  app.use("/api", apiRouter);
+
+  // Catch-all for missing API routes (within /api prefix)
+  apiRouter.all("*", (req, res) => {
     res.status(404).json({ error: "API Route Not Found", path: req.url });
   });
 

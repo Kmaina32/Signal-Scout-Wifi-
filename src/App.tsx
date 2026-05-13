@@ -120,7 +120,7 @@ const SpeedGauge = ({ value = 0, max = 1000, label, unit, color = "#22d3ee" }: {
             animate={{ opacity: 1, y: 0 }}
             className="text-2xl font-black text-white font-mono tracking-tighter"
           >
-            {safeValue.toFixed(1)}
+            {(safeValue ?? 0).toFixed(1)}
           </motion.span>
           <span className="text-[9px] font-bold text-slate-500 uppercase">{unit}</span>
         </div>
@@ -842,21 +842,42 @@ export default function App() {
               {/* Metric Grid Column */}
               <div className="lg:col-span-7 flex flex-col gap-8">
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
-                    <SpeedGauge 
-                      label="Local Link Capability" 
-                      value={data.rx_rate} 
-                      unit="Mbps"
-                      max={1200}
-                      color="#22d3ee"
-                    />
-                    <SpeedGauge 
-                      label="Internet Performance" 
-                      value={data.internet_dl} 
-                      unit="Mbps"
-                      max={500}
-                      color="#10b981"
-                    />
+                    <div className="relative group">
+                      <SpeedGauge 
+                        label="Local Link Capability" 
+                        value={data.rx_rate} 
+                        unit="Mbps"
+                        max={1200}
+                        color="#22d3ee"
+                      />
+                      {data.isSimulated && (
+                        <div className="absolute top-2 right-2 p-1 bg-amber-500/10 border border-amber-500/20 rounded-md opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none">
+                          <span className="text-[8px] font-mono text-amber-500 font-bold uppercase tracking-tighter">Diagnostic Simulation</span>
+                        </div>
+                      )}
+                    </div>
+                    <div className="relative group">
+                      <SpeedGauge 
+                        label="Internet Performance" 
+                        value={data.internet_dl} 
+                        unit="Mbps"
+                        max={500}
+                        color="#10b981"
+                      />
+                      <div className="absolute top-2 right-2 p-1 bg-slate-800/40 rounded-md opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none">
+                        <span className="text-[8px] font-mono text-slate-400 font-bold uppercase tracking-tighter">Last Update: {data.last_wan_update}</span>
+                      </div>
+                    </div>
                   </div>
+
+                  {data.isSimulated && (
+                    <div className="px-4 py-3 bg-amber-500/5 border border-amber-500/20 rounded-xl flex items-center gap-3">
+                      <AlertCircle size={14} className="text-amber-500 shrink-0" />
+                      <p className="text-[10px] text-amber-200/70 leading-tight">
+                        <span className="text-amber-500 font-bold font-mono">REMOTE_PREVIEW_LIMITATION:</span> Real-time hardware telemetry requires local deployment. Interface is currently operating in <span className="text-amber-400 underline underline-offset-2">Diagnostic Simulation Mode</span>. Download to access your Wi-Fi radio.
+                      </p>
+                    </div>
+                  )}
 
                   <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                     <MetricCard 
