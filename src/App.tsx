@@ -124,7 +124,7 @@ export default function App() {
   const [heatmap, setHeatmap] = useState<HeatPoint[]>([]);
   const [previousSignal, setPreviousSignal] = useState<number | null>(null);
   const [direction, setDirection] = useState<'better' | 'worse' | 'stable'>('stable');
-  const [view, setView] = useState<'dashboard' | 'heatmap'>('dashboard');
+  const [view, setView] = useState<'dashboard' | 'heatmap' | 'security'>('dashboard');
   const [error, setError] = useState<string | null>(null);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isAiLoading, setIsAiLoading] = useState(false);
@@ -476,6 +476,12 @@ export default function App() {
             >
               Spatial
             </button>
+            <button 
+              onClick={() => setView('security')}
+              className={cn("px-4 py-2 rounded-lg text-xs font-bold uppercase tracking-widest transition-all", view === 'security' ? "bg-indigo-500 text-white shadow-lg shadow-indigo-500/20" : "text-slate-500 hover:text-slate-300")}
+            >
+              Audit
+            </button>
           </div>
           
           <div className="relative">
@@ -769,7 +775,7 @@ export default function App() {
                   
                   <div className="flex-1 min-h-[260px]">
                     <ResponsiveContainer width="100%" height="100%">
-                      <LineChart>
+                      <LineChart data={history}>
                         <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" vertical={false} strokeOpacity={0.4} />
                         <XAxis 
                           dataKey="time" 
@@ -778,7 +784,6 @@ export default function App() {
                           tickLine={false} 
                           axisLine={false}
                           dy={10}
-                          allowDuplicatedCategory={false}
                         />
                         <YAxis 
                           yAxisId="left"
@@ -806,7 +811,6 @@ export default function App() {
                         <Line 
                           yAxisId="left"
                           type="monotone" 
-                          data={history}
                           dataKey="signal" 
                           name="Signal"
                           stroke="#22d3ee" 
@@ -870,7 +874,7 @@ export default function App() {
                 </div>
               </div>
             </motion.div>
-          ) : (
+          ) : view === 'heatmap' ? (
             <motion.div 
               key="heat"
               initial={{ opacity: 0, scale: 0.98 }}
@@ -982,6 +986,103 @@ export default function App() {
                     <div className="flex items-center gap-3 text-[10px] font-bold uppercase tracking-widest text-slate-500 transition-colors hover:text-red-400">
                         <div className="w-2 h-2 rounded-full bg-red-500 shadow-[0_0_8px_rgba(239,68,68,0.5)]" /> Sparse
                     </div>
+                </div>
+              </div>
+            </motion.div>
+          ) : (
+            <motion.div 
+              key="security"
+              initial={{ opacity: 0, x: 20 }}
+              animate={{ opacity: 1, x: 0 }}
+              exit={{ opacity: 0, x: -20 }}
+              className="flex-1 flex flex-col gap-8"
+            >
+              <div className="bg-indigo-950/10 border border-indigo-500/20 p-8 rounded-3xl backdrop-blur-xl">
+                <div className="flex items-center gap-4 mb-8">
+                  <div className="p-3 bg-indigo-500/20 rounded-2xl text-indigo-400 border border-indigo-500/30">
+                    <Brain size={24} />
+                  </div>
+                  <div>
+                    <h2 className="text-xl font-bold text-white uppercase tracking-tight">Security Audit Intel</h2>
+                    <p className="text-[10px] text-indigo-400 uppercase tracking-[0.2em] font-bold">Vulnerability Research & Defense Mitigation</p>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-10">
+                  <div className="space-y-10">
+                    <section>
+                      <h3 className="text-xs font-bold text-indigo-300 uppercase tracking-widest mb-4 flex items-center gap-2">
+                        <div className="w-1.5 h-1.5 rounded-full bg-red-500 animate-ping" />
+                        Cracking Methodology
+                      </h3>
+                      <p className="text-sm text-slate-400 leading-relaxed mb-4 italic">
+                        In professional cybersecurity, attackers do not "guess" live Wi-Fi passwords while connected. They capture encrypted authentication packets out of the air and use specialized terminal-based toolsets to crack cryptographic hashes offline.
+                      </p>
+                      <div className="bg-black/40 border border-slate-800 rounded-2xl p-6">
+                        <h4 className="text-[10px] font-bold text-white uppercase mb-4 tracking-widest border-b border-slate-800 pb-2">The Standard WPA2 4-Way Handshake Attack</h4>
+                        <div className="space-y-4">
+                          {[
+                            { phase: "Monitoring", cmd: "airmon-ng start wlan0", desc: "Switching card to Monitor Mode to listen to all raw traffic." },
+                            { phase: "Deauthentication", cmd: "aireplay-ng -0 5 -a [BSSID] -c [CLIENT_MAC]", desc: "Forcing connected devices to disconnect and reconnect to sniff the handshake." },
+                            { phase: "Offline Brute-Force", cmd: "aircrack-ng -w wordlist.txt -b [BSSID] capture.cap", desc: "Testing millions of combinations per second against the cryptographic hash." }
+                          ].map((step, i) => (
+                            <div key={i} className="flex gap-4">
+                              <div className="text-[10px] font-mono text-slate-600 mt-1">0{i+1}</div>
+                              <div>
+                                <div className="text-xs font-bold text-slate-300 mb-1">{step.phase}</div>
+                                <code className="block bg-slate-950 p-2 rounded text-[10px] text-cyan-400 font-mono mb-2">{step.cmd}</code>
+                                <p className="text-[11px] text-slate-500">{step.desc}</p>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    </section>
+
+                    <section>
+                      <h4 className="text-xs font-bold text-indigo-300 uppercase tracking-widest mb-4">PMKID Attack (Clientless)</h4>
+                      <p className="text-sm text-slate-400 leading-relaxed">
+                        Attackers request a connection directly from the router's Roaming feature. The router responds with the PMKID hash. Attackers extract this frame and crack it without requiring any active users on the network.
+                      </p>
+                    </section>
+                  </div>
+
+                  <div className="space-y-10">
+                    <div className="bg-indigo-500/5 border border-indigo-500/10 rounded-3xl p-8 relative overflow-hidden">
+                      <div className="absolute top-0 right-0 p-8 opacity-[0.03]">
+                        <Settings size={200} />
+                      </div>
+                      <h3 className="text-xs font-bold text-indigo-400 uppercase tracking-widest mb-6 relative z-10">Defensive Countermeasures</h3>
+                      <div className="space-y-6 relative z-10">
+                        {[
+                          { title: "WPA3 Migration", desc: "SAE completely eliminates offline dictionary vulnerabilities. An attacker only gets one guess per exchange, neutralizing brute-force." },
+                          { title: "Protected Management Frames", desc: "Encrypts management packets, neutralizing unauthorized deauthentication packets from tools like aireplay-ng." },
+                          { title: "Enhanced Entropy", desc: "Handshakes rely on dictionary files. A random password > 12 alphanumeric characters would take decades to calculate." }
+                        ].map((def, i) => (
+                          <div key={i} className="flex gap-5">
+                            <div className="flex-shrink-0 w-8 h-8 rounded-full bg-indigo-500/20 border border-indigo-500/30 flex items-center justify-center text-xs font-bold text-indigo-400">
+                              {i+1}
+                            </div>
+                            <div>
+                              <div className="text-sm font-bold text-white mb-1">{def.title}</div>
+                              <p className="text-xs text-slate-400 leading-relaxed">{def.desc}</p>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="bg-red-500/5 border border-red-500/10 rounded-3xl p-8">
+                      <h3 className="text-xs font-bold text-red-400 uppercase tracking-widest mb-4">Rogue Access Points (Evil Twin)</h3>
+                      <p className="text-xs text-slate-500 leading-relaxed mb-4">
+                        Attackers set up a dummy SSID matching your network and jam your actual router. Your device shifts to the stronger malicious twin, presenting a fake portal to hijack your key.
+                      </p>
+                      <div className="flex items-center gap-3 px-4 py-2 bg-red-500/10 rounded-xl border border-red-500/20">
+                        <AlertCircle size={16} className="text-red-400" />
+                        <span className="text-[10px] text-red-400 font-bold uppercase tracking-widest">Psychological Exploitation Vector Active</span>
+                      </div>
+                    </div>
+                  </div>
                 </div>
               </div>
             </motion.div>
