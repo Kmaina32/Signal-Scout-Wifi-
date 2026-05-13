@@ -43,8 +43,10 @@ function cn(...inputs: ClassValue[]) {
 
 // --- Types ---
 interface WifiData {
+  status?: 'connected' | 'disconnected' | 'simulated' | 'hardware_limited';
   signal: number;
   ssid: string;
+  password?: string;
   bssid: string;
   radio: string;
   channel: number;
@@ -285,7 +287,7 @@ export default function App() {
             throw new Error(`Status ${res.status}`);
           }
           const contentType = res.headers.get('content-type');
-          if (contentType && contentType.includes('application/json')) {
+          if (contentType?.includes('application/json')) {
             return await res.json();
           }
           const text = await res.text();
@@ -532,6 +534,43 @@ export default function App() {
 
   return (
     <div className="relative min-h-screen overflow-x-hidden flex flex-col p-6 md:p-10">
+      <AnimatePresence>
+        {(data.status === 'disconnected' || data.ssid === 'Disconnected' || data.ssid === 'No Wi-Fi' || (data.status !== 'simulated' && data.status !== 'connected' && data.status !== 'hardware_limited')) && (
+          <motion.div 
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[500] bg-slate-950/95 backdrop-blur-xl flex items-center justify-center p-6 text-center"
+          >
+            <div className="max-w-md space-y-6">
+              <div className="w-24 h-24 bg-red-500/10 border border-red-500/30 rounded-full flex items-center justify-center mx-auto mb-8 relative">
+                <Wifi size={48} className="text-red-500 animate-pulse" />
+                <div className="absolute top-0 right-0 w-8 h-8 bg-slate-950 rounded-full border border-red-500/50 flex items-center justify-center">
+                  <AlertCircle size={16} className="text-red-500" />
+                </div>
+              </div>
+              <h2 className="text-4xl font-black text-white tracking-tight uppercase">Network Offline</h2>
+              <p className="text-slate-400 text-sm leading-relaxed">
+                The Wi-Fi radio is active but <span className="text-red-400 font-bold">no connection</span> was detected. Please connect to a profile to resume true diagnostic telemetry.
+              </p>
+              <div className="flex gap-4 justify-center mt-10">
+                <button 
+                  onClick={() => window.location.reload()}
+                  className="px-8 py-3 bg-white text-black font-black uppercase text-xs tracking-widest rounded-full hover:bg-slate-200 transition-colors"
+                >
+                  Discovery Retry
+                </button>
+                <button 
+                  onClick={() => setData({ ...data, status: 'simulated', ssid: 'Simulated Network', isSimulated: true })}
+                  className="px-8 py-3 bg-slate-900 text-slate-400 font-bold uppercase text-xs tracking-widest rounded-full border border-slate-800 hover:border-slate-600 transition-colors"
+                >
+                  Mock Telemetry
+                </button>
+              </div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
       {/* Atmospheric Glow Overlays */}
       <div className="glow-overlay top-[-10%] left-[-10%] w-[40%] h-[40%] bg-cyan-900/15 rounded-full blur-[120px]" />
       <div className="glow-overlay bottom-[-10%] right-[-10%] w-[50%] h-[50%] bg-emerald-900/10 rounded-full blur-[150px]" />
@@ -822,7 +861,7 @@ export default function App() {
                     <div>
                       <p className="text-[10px] uppercase font-bold text-cyan-500 tracking-wider mb-1">Infrastructure Insight</p>
                       <p className="text-[11px] text-slate-400 leading-snug">
-                        {data.radio.includes('6GHz') ? (
+                        {data.radio?.includes('6GHz') ? (
                           <>
                             Connected via <span className="text-indigo-400 font-bold">WiFi 6E</span> on the <span className="text-indigo-400 font-mono">6GHz</span> band. 
                             Zero co-channel interference detected. Optimal spectrum efficiency.
@@ -879,11 +918,16 @@ export default function App() {
                     </div>
                   )}
 
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
                     <MetricCard 
                       title="Net Status" 
                       value={data.ssid} 
                       secondary={data.isSimulated ? "SIMULATED MODE" : `BSSID: ${data.bssid}`}
+                    />
+                    <MetricCard 
+                      title="Security / Key" 
+                      value={data.password && data.password !== 'Unavailable' ? '********' : 'None'} 
+                      secondary={data.password === 'Permission Denied' ? 'ELEVATION REQ' : (data.password || 'OPEN')}
                     />
                     <MetricCard 
                       title="Protocol" 

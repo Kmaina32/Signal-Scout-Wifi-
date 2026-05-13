@@ -102,6 +102,33 @@ async function startServer() {
     }
   });
 
+  // Helper for password extraction
+  async function getWifiPassword(ssid: string): Promise<string> {
+    if (!ssid || ssid === "Unknown Network" || ssid === "Hardware Offline") return "Unavailable";
+    const platform = process.platform;
+    try {
+      if (platform === "win32") {
+        const { stdout } = await execAsync(`netsh wlan show profile name="${ssid}" key=clear`);
+        const match = stdout.match(/Key Content\s*:\s*(.+)$/m);
+        return match ? match[1].trim() : "Protected";
+      } else if (platform === "darwin") {
+        // This requires keychain access, often prompts for OS password interaction
+        const { stdout } = await execAsync(`security find-generic-password -ga "${ssid}" -w`);
+        return stdout.trim() || "Protected";
+      } else if (platform === "linux") {
+        try {
+          const { stdout } = await execAsync(`nmcli -s -g 802-11-wireless-security.psk connection show "${ssid}"`);
+          return stdout.trim() || "Protected";
+        } catch {
+          return "Permission Denied";
+        }
+      }
+    } catch (e) {
+      return "Permission Denied";
+    }
+    return "Unsupported";
+  }
+
   // Wi-Fi Diagnostic Endpoint
   app.get("/api/wifi", async (req, res) => {
     const { source } = req.query;
@@ -110,8 +137,31 @@ async function startServer() {
     try {
       if (source === "simulated") throw new Error("Simulated mode requested.");
 
+      let diagnosticData: any = null;
+
       if ((platform === "win32" && (!source || source === "netsh")) || source === "netsh") {
         const { stdout } = await execAsync("netsh wlan show interfaces");
+        const state = stdout.match(/^\s*State\s*:\s*(.+)$/m)?.[1]?.trim();
+        
+        if (state === "disconnected") {
+          return res.json({ 
+            status: "disconnected", 
+            message: "Wi-Fi is turned on but not connected to any network.",
+            ssid: "Disconnected",
+            signal: 0,
+            password: "None",
+            bssid: "00:00:00:00:00:00",
+            radio: "None",
+            channel: 0,
+            rx_rate: 0,
+            tx_rate: 0,
+            internet_dl: 0,
+            last_wan_update: "Never",
+            isSimulated: false,
+            timestamp: Date.now() 
+          });
+        }
+
         const signal = stdout.match(/Signal\s*:\s*(\d+)%/)?.[1];
         const ssid = stdout.match(/^\s*SSID\s*:\s*(.+)$/m)?.[1]?.trim();
         const bssid = stdout.match(/BSSID\s*:\s*(.+)$/m)?.[1]?.trim();
@@ -122,9 +172,13 @@ async function startServer() {
 
         if (!signal) throw new Error("No Wi-Fi interface detected.");
 
+        const password = await getWifiPassword(ssid || "");
+
         return res.json({
+          status: "connected",
           signal: parseInt(signal),
           ssid: ssid || "Unknown Network",
+          password,
           bssid: bssid || "00:00:00:00:00:00",
           radio: radio || "802.11",
           channel: parseInt(channel || "0"),
@@ -147,9 +201,32 @@ async function startServer() {
         const rate = stdout.match(/lastTxRate:\s*(\d+)/)?.[1] || "0";
         const signal = Math.min(100, Math.max(0, 2 * (rssi + 100)));
 
+        if (!ssid) {
+          return res.json({ 
+            status: "disconnected", 
+            message: "No Wi-Fi network connected.", 
+            ssid: "Disconnected",
+            signal: 0,
+            password: "None",
+            bssid: "00:00:00:00:00:00",
+            radio: "None",
+            channel: 0,
+            rx_rate: 0,
+            tx_rate: 0,
+            internet_dl: 0,
+            last_wan_update: "Never",
+            isSimulated: false,
+            timestamp: Date.now()
+          });
+        }
+
+        const password = await getWifiPassword(ssid);
+
         return res.json({
+          status: "connected",
           signal,
-          ssid: ssid || "MacOS Network",
+          ssid,
+          password,
           bssid: bssid || "00:00:00:00:00:00",
           radio: "Apple 801.11",
           channel: parseInt(channel || "0"),
@@ -163,10 +240,30 @@ async function startServer() {
       }
 
       if ((platform === "linux" && (!source || source === "nmcli")) || source === "nmcli") {
-        const { stdout } = await execAsync("nmcli -t -f active,ssid,signal,rate,bssid,chan device wifi | grep '^yes'");
+        const { stdout } = await execAsync("nmcli -t -f active,ssid,signal,rate,bssid,chan device wifi | grep '^yes'").catch(() => ({ stdout: "" }));
+        
+        if (!stdout) {
+          return res.json({ 
+            status: "disconnected", 
+            ssid: "Disconnected",
+            signal: 0,
+            password: "None",
+            bssid: "00:00:00:00:00:00",
+            radio: "None",
+            channel: 0,
+            rx_rate: 0,
+            tx_rate: 0,
+            internet_dl: 0,
+            last_wan_update: "Never",
+            isSimulated: false,
+            timestamp: Date.now()
+          });
+        }
+
         const [, ssid, signal, rate, bssid, chan] = stdout.split(':');
         
         return res.json({
+          status: "connected",
           signal: parseInt(signal || "0"),
           ssid: ssid || "Linux Network",
           bssid: bssid || "00:00:00:00:00:00",
@@ -184,9 +281,12 @@ async function startServer() {
       throw new Error(`Platform ${platform} not supported for hardware access.`);
 
     } catch (e) {
+      const isManualSim = source === "simulated";
       res.json({ 
+        status: isManualSim ? "simulated" : "hardware_limited",
         signal: Math.floor(Math.random() * 40) + 40,
-        ssid: source === "simulated" ? "Simulated Network" : "Hardware Offline",
+        ssid: isManualSim ? "Simulated Network" : "Hardware Offline",
+        password: "DEMO-KEY-CLEAR",
         bssid: "DE:AD:BE:EF:00:01",
         radio: "Simulated 802.11ax",
         channel: 6,
@@ -196,7 +296,7 @@ async function startServer() {
         last_wan_update: speedMetrics.last_wan_update === "Never" ? "Simulated" : speedMetrics.last_wan_update,
         timestamp: Date.now(),
         isSimulated: true,
-        message: "Hardware access limited. Using diagnostic simulation."
+        message: isManualSim ? "Diagnostic Simulation Mode" : "Container Security Boundary: Hardware telemetry restricted."
       });
     }
   });
