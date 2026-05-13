@@ -214,6 +214,11 @@ async function startServer() {
     }
   });
 
+  // Catch-all for missing API routes to return JSON instead of HTML
+  app.all("/api/*", (req, res) => {
+    res.status(404).json({ error: "API Route Not Found", path: req.url });
+  });
+
   // Vite middleware for development
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({

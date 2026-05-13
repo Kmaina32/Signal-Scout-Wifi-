@@ -151,6 +151,7 @@ export default function App() {
     const fetchSpectral = async () => {
       try {
         const res = await fetch('/api/networks');
+        if (!res.ok) throw new Error(`Networks API error: ${res.status}`);
         const data = await res.json();
         
         // Advanced mock generator for 6E support
@@ -209,8 +210,23 @@ export default function App() {
         const wifiRes = await fetch(`/api/wifi${query}`);
         const pingRes = await fetch('/api/ping');
         
+        if (!wifiRes.ok) {
+          const errorText = await wifiRes.text();
+          console.error("Wifi API returned non-OK status:", wifiRes.status, errorText.substring(0, 100));
+          throw new Error(`Wifi API error: ${wifiRes.status}`);
+        }
+
         const wifiData = await wifiRes.json();
-        const pingData = await pingRes.json();
+        
+        // Handle ping if it failed separately
+        let pingData = { latency: 0 };
+        if (pingRes.ok) {
+          try {
+            pingData = await pingRes.json();
+          } catch (e) {
+            console.error("Failed to parse ping JSON", e);
+          }
+        }
         
         if (wifiData.error) {
           setError(wifiData.message || "Hardware unavailable");
