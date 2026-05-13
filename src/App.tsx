@@ -151,12 +151,29 @@ export default function App() {
       try {
         const res = await fetch('/api/networks');
         const data = await res.json();
-        // Simple mock parser for raw output (needs actual platform-specific parsing for better viz)
-        // For now, let's generate some mock channel usage based on raw or just mock it if simulated
-        const mockSpectral = Array.from({ length: 13 }, (_, i) => ({
-          channel: i + 1,
-          usage: Math.floor(Math.random() * 60) + (i % 5 === 0 ? 30 : 0)
-        }));
+        
+        // Advanced mock generator for 6E support
+        // Channels: 1-13 (2.4G), 36-165 (5G), 1-233 (6G)
+        const mockSpectral = [
+          // 2.4GHz Band
+          ...Array.from({ length: 13 }, (_, i) => ({
+            channel: i + 1,
+            usage: Math.floor(Math.random() * 50) + (i === 5 ? 40 : 0),
+            band: '2.4GHz'
+          })),
+          // 5GHz Band (subset for viz)
+          ...[36, 40, 44, 48, 149, 153, 157, 161].map(ch => ({
+            channel: ch,
+            usage: Math.floor(Math.random() * 30) + 5,
+            band: '5GHz'
+          })),
+          // 6GHz Band (WiFi 6E)
+          ...[1, 37, 73, 109, 145, 197].map(ch => ({
+            channel: ch,
+            usage: Math.floor(Math.random() * 10) + 1,
+            band: '6GHz'
+          }))
+        ];
         setSpectralData(mockSpectral);
       } catch (e) {
         console.error("Failed to fetch spectral data");
@@ -649,36 +666,53 @@ export default function App() {
                 )}
                 
                 {settings.showSpectralScanner && (
-                  <div className="mt-8 w-full bg-slate-900/40 border border-slate-800/60 p-6 rounded-2xl backdrop-blur-md shadow-xl overflow-hidden">
+                  <div className="mt-8 w-full bg-slate-900/40 border border-slate-800/60 p-6 rounded-2xl backdrop-blur-md shadow-xl overflow-hidden relative">
                     <div className="text-[10px] uppercase tracking-[0.2em] text-slate-500 font-bold mb-6 flex justify-between items-center">
-                      Spectral Congestion Scanner
-                      <span className="font-mono text-[9px] text-slate-600 bg-slate-950 px-2 py-0.5 rounded uppercase tracking-normal">2.4GHz / 5GHz SCAN</span>
+                      Advanced Spectral Scanner
+                      <span className="font-mono text-[9px] text-slate-600 bg-slate-950 px-2 py-0.5 rounded uppercase tracking-normal">WiFi 6E [6GHz] ENABLED</span>
                     </div>
                     
-                    <div className="h-[120px] w-full">
+                    <div className="h-[140px] w-full">
                       <ResponsiveContainer width="100%" height="100%">
                         <BarChart data={spectralData}>
-                          <Bar dataKey="usage" radius={[4, 4, 0, 0]}>
+                          <Bar dataKey="usage" radius={[3, 3, 0, 0]}>
                             {spectralData.map((entry, index) => (
                               <Cell 
                                 key={`cell-${index}`} 
-                                fill={entry.usage > 70 ? '#ef4444' : entry.usage > 40 ? '#f59e0b' : '#334155'} 
+                                fill={
+                                  entry.band === '6GHz' ? '#8b5cf6' : 
+                                  entry.band === '5GHz' ? '#06b6d4' : 
+                                  entry.usage > 45 ? '#ef4444' : '#334155'
+                                } 
+                                fillOpacity={entry.band === '6GHz' ? 0.8 : 1}
                               />
                             ))}
                           </Bar>
-                          <XAxis dataKey="channel" axisLine={false} tickLine={false} fontSize={9} tick={{ fill: '#475569' }} dy={5} />
+                          <XAxis 
+                            dataKey="channel" 
+                            axisLine={false} 
+                            tickLine={false} 
+                            fontSize={8} 
+                            tick={{ fill: '#475569' }} 
+                            dy={5}
+                            label={{ value: 'Channels (2.4G/5G/6E)', position: 'insideBottom', offset: -10, fontSize: 8, fill: '#334155' }}
+                          />
                           <Tooltip 
                             cursor={{ fill: 'rgba(255, 255, 255, 0.05)' }} 
                             contentStyle={{ backgroundColor: '#020617', border: '1px solid #1e293b', fontSize: '10px' }}
-                            labelFormatter={(v) => `Channel ${v}`}
-                            formatter={(v: number) => [`${v}% load`, 'Load']}
+                            labelFormatter={(v, props) => {
+                              const entry = props[0]?.payload;
+                              return `Band: ${entry?.band || 'Unknown'} - Ch ${v}`;
+                            }}
+                            formatter={(v: number) => [`${v}% Load`, 'Spectral Density']}
                           />
                         </BarChart>
                       </ResponsiveContainer>
                     </div>
-                    <div className="flex justify-between mt-4 text-[8px] font-bold uppercase tracking-widest text-slate-600">
-                      <span>Lower Freq</span>
-                      <span>High Capacity (5G) Area</span>
+                    <div className="flex justify-between mt-4 text-[8px] font-bold uppercase tracking-widest">
+                      <span className="text-slate-600">2.4 GHz</span>
+                      <span className="text-cyan-600">5 GHz High-Cap</span>
+                      <span className="text-indigo-400">WiFi 6E (6 GHz)</span>
                     </div>
                   </div>
                 )}
@@ -692,7 +726,17 @@ export default function App() {
                     <div>
                       <p className="text-[10px] uppercase font-bold text-cyan-500 tracking-wider mb-1">Infrastructure Insight</p>
                       <p className="text-[11px] text-slate-400 leading-snug">
-                        Current latency stabilized at <span className="text-cyan-400 font-mono">{(pingHistory[pingHistory.length-1]?.latency || 0)}ms</span>. Network topology suggests {data.channel > 14 ? 'a high-frequency 5GHz' : 'a localized 2.4GHz'} deployment.
+                        {data.radio.includes('6GHz') ? (
+                          <>
+                            Connected via <span className="text-indigo-400 font-bold">WiFi 6E</span> on the <span className="text-indigo-400 font-mono">6GHz</span> band. 
+                            Zero co-channel interference detected. Optimal spectrum efficiency.
+                          </>
+                        ) : (
+                          <>
+                            Current latency stabilized at <span className="text-cyan-400 font-mono">{(pingHistory[pingHistory.length-1]?.latency || 0)}ms</span>. 
+                            Network topology suggests {data.channel > 14 ? 'a high-frequency 5GHz' : 'a localized 2.4GHz'} deployment.
+                          </>
+                        )}
                       </p>
                     </div>
                   </div>

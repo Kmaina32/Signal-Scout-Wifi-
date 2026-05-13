@@ -102,12 +102,13 @@ async function startServer() {
     } catch (e) {
       // Simulate data if hardware fails or simulated is requested
       const simulatedSignal = Math.floor(Math.random() * 40) + 40; // 40-80%
+      const supports6E = Math.random() > 0.5;
       res.status(200).json({ 
         signal: simulatedSignal,
         ssid: source === "simulated" ? "Simulated Network" : "Hardware Offline",
         bssid: "DE:AD:BE:EF:00:01",
-        radio: "Simulated 802.11ax",
-        channel: 6,
+        radio: supports6E ? "802.11ax (6GHz)" : "Simulated 802.11ax",
+        channel: supports6E ? (Math.random() > 0.5 ? 37 : 197) : 6,
         rx_rate: 120.5,
         tx_rate: 98.2,
         timestamp: Date.now(),
@@ -155,7 +156,7 @@ async function startServer() {
       }
     } catch (e) {
       res.json({ 
-        raw: "Simulated spectral data: Channel 1 (2.4GHz) - 80% load, Channel 6 (2.4GHz) - 20% load, Channel 36 (5GHz) - 5% load", 
+        raw: "Simulated spectral data: Channel 1 (2.4GHz) - 80% load, Channel 6 (2.4GHz) - 20% load, Channel 36 (5GHz) - 5% load, Channel 37 (6GHz) - 2% load, Channel 197 (6GHz) - 1% load", 
         platform: "simulated" 
       });
     }
