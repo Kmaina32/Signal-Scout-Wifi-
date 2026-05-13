@@ -49,9 +49,39 @@ async function startServer() {
   const app = express();
   const PORT = 3000;
 
+  // Request Logging
+  app.use((req, res, next) => {
+    if (req.url.startsWith('/api')) {
+      console.log(`[API] ${req.method} ${req.url}`);
+    }
+    next();
+  });
+
   // Health check
   app.get("/api/health", (req, res) => {
     res.json({ status: "ok" });
+  });
+
+  // Diagnostic: Ping & Jitter
+  app.get("/api/ping", async (req, res) => {
+    const target = (req.query.target as string) || "8.8.8.8";
+    try {
+      // Basic ping - 1 packet for quick response
+      const countFlag = process.platform === "win32" ? "-n 1" : "-c 1";
+      const { stdout } = await execAsync(`ping ${countFlag} ${target}`);
+      
+      let latency = 0;
+      if (process.platform === "win32") {
+        latency = parseInt(stdout.match(/time[=<](\d+)ms/)?.[1] || "0");
+      } else {
+        latency = parseFloat(stdout.match(/time=(\d+\.?\d*)\s*ms/)?.[1] || "0");
+      }
+
+      res.json({ latency, target, timestamp: Date.now() });
+    } catch (e) {
+      // Fallback to random latency if ping fails (e.g. in container environments)
+      res.json({ latency: Math.floor(Math.random() * 20) + 15, target, simulated: true });
+    }
   });
 
   // Wi-Fi Diagnostic Endpoint
@@ -190,27 +220,6 @@ async function startServer() {
         raw: "Simulated spectral data: Channel 1 (2.4GHz) - 80% load, Channel 6 (2.4GHz) - 20% load, Channel 36 (5GHz) - 5% load, Channel 37 (6GHz) - 2% load, Channel 197 (6GHz) - 1% load", 
         platform: "simulated" 
       });
-    }
-  });
-
-  // Diagnostic: Ping & Jitter
-  app.get("/api/ping", async (req, res) => {
-    const target = req.query.target || "8.8.8.8";
-    try {
-      // Basic ping - 1 packet for quick response
-      const countFlag = process.platform === "win32" ? "-n 1" : "-c 1";
-      const { stdout } = await execAsync(`ping ${countFlag} ${target}`);
-      
-      let latency = 0;
-      if (process.platform === "win32") {
-        latency = parseInt(stdout.match(/time[=<](\d+)ms/)?.[1] || "0");
-      } else {
-        latency = parseFloat(stdout.match(/time=(\d+\.?\d*)\s*ms/)?.[1] || "0");
-      }
-
-      res.json({ latency, target, timestamp: Date.now() });
-    } catch (e) {
-      res.json({ latency: Math.floor(Math.random() * 20) + 15, target, simulated: true });
     }
   });
 

@@ -210,22 +210,26 @@ export default function App() {
         const wifiRes = await fetch(`/api/wifi${query}`);
         const pingRes = await fetch('/api/ping');
         
-        if (!wifiRes.ok) {
-          const errorText = await wifiRes.text();
-          console.error("Wifi API returned non-OK status:", wifiRes.status, errorText.substring(0, 100));
-          throw new Error(`Wifi API error: ${wifiRes.status}`);
-        }
-
-        const wifiData = await wifiRes.json();
-        
-        // Handle ping if it failed separately
-        let pingData = { latency: 0 };
-        if (pingRes.ok) {
-          try {
-            pingData = await pingRes.json();
-          } catch (e) {
-            console.error("Failed to parse ping JSON", e);
+        const safeJson = async (res: Response) => {
+          if (!res.ok) {
+            const text = await res.text();
+            throw new Error(`Status ${res.status}: ${text.substring(0, 100)}`);
           }
+          const contentType = res.headers.get('content-type');
+          if (contentType && contentType.includes('application/json')) {
+            return await res.json();
+          }
+          const text = await res.text();
+          throw new Error(`Expected JSON but got ${contentType}: ${text.substring(0, 50)}`);
+        };
+
+        const wifiData = await safeJson(wifiRes);
+        
+        let pingData = { latency: 0 };
+        try {
+          pingData = await safeJson(pingRes);
+        } catch (e) {
+          console.warn("Ping fetch failed, continuing with zero latency", e);
         }
         
         if (wifiData.error) {
