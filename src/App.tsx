@@ -65,6 +65,50 @@ interface HeatPoint {
   id: string;
 }
 
+// --- Error Boundary ---
+class ErrorBoundary extends React.Component<{ children: React.ReactNode }, { hasError: boolean; error: any }> {
+  constructor(props: any) {
+    super(props);
+    this.state = { hasError: false, error: null };
+  }
+
+  static getDerivedStateFromError(error: any) {
+    return { hasError: true, error };
+  }
+
+  componentDidCatch(error: any, errorInfo: any) {
+    console.error("Critical Component Failure:", error, errorInfo);
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="min-h-screen flex items-center justify-center bg-[#020617] p-8">
+          <div className="max-w-md w-full bg-slate-900/50 border border-red-500/30 p-8 rounded-3xl backdrop-blur-xl text-center">
+            <div className="w-16 h-16 bg-red-500/10 rounded-2xl flex items-center justify-center mx-auto mb-6 border border-red-500/20">
+              <AlertCircle size={32} className="text-red-400" />
+            </div>
+            <h2 className="text-xl font-bold text-white mb-2 uppercase tracking-tight">System Exception</h2>
+            <p className="text-slate-400 text-sm leading-relaxed mb-6">
+              An unexpected error occurred in the visualization engine.
+            </p>
+            <div className="p-4 bg-slate-950/50 rounded-xl border border-slate-800 text-left mb-6 font-mono text-[10px] text-red-400/80 overflow-auto max-h-32">
+              {this.state.error?.message || "Unknown error"}
+            </div>
+            <button 
+              onClick={() => window.location.reload()}
+              className="w-full py-3 bg-slate-800 text-white rounded-xl font-bold uppercase tracking-widest text-xs hover:bg-slate-700 transition-all font-sans"
+            >
+              Reboot Interface
+            </button>
+          </div>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
 // --- Components ---
 
 // RPM Style Speed Gauge Component
@@ -191,6 +235,14 @@ function RadarGauge({ signal }: { signal: number }) {
 }
 
 export default function App() {
+  return (
+    <ErrorBoundary>
+      <AppContent />
+    </ErrorBoundary>
+  );
+}
+
+function AppContent() {
   const [data, setData] = useState<WifiData | null>(null);
   const [history, setHistory] = useState<any[]>([]);
   const [heatmap, setHeatmap] = useState<HeatPoint[]>([]);
@@ -216,13 +268,34 @@ export default function App() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const floorPlanInputRef = useRef<HTMLInputElement>(null);
 
+  // Global error suppression for Vite HMR (avoid noisy toasts for expected WebSocket issues)
+  useEffect(() => {
+    const handleRejection = (event: PromiseRejectionEvent) => {
+      const reason = String(event.reason || '');
+      if (reason.includes('WebSocket closed') || reason.includes('WebSocket connection failed')) {
+        event.preventDefault();
+        console.info("[HMR] Suppressed expected WebSocket connection warning.");
+      }
+    };
+    window.addEventListener('unhandledrejection', handleRejection);
+    return () => window.removeEventListener('unhandledrejection', handleRejection);
+  }, []);
+
   // Spectral Data Fetch
   useEffect(() => {
     const fetchSpectral = async () => {
       try {
         const res = await fetch('/api/networks');
         if (!res.ok) throw new Error(`Networks API error: ${res.status}`);
-        const data = await res.json();
+        
+        const contentType = res.headers.get('content-type');
+        let data;
+        if (contentType?.includes('application/json')) {
+          data = await res.json();
+        } else {
+          await res.text(); // Consume body
+          throw new Error("Expected JSON from networks API");
+        }
         
         // Advanced mock generator for 6E support
         // Channels: 1-13 (2.4G), 36-165 (5G), 1-233 (6G)
