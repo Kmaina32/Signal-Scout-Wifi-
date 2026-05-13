@@ -1,0 +1,6 @@
+{
+  "name": "Signal Scout Pro",
+  "description": "Professional Wi-Fi diagnostic suite. Requires local deployment for real-time hardware telemetry and spatial signal mapping.",
+  "requestFramePermissions": [],
+  "majorCapabilities": []
+}
